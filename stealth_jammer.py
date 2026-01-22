@@ -122,19 +122,72 @@ class StealthJammer(tk.Tk):
         style.configure('Stat.TLabel', font=('Consolas', 12, 'bold'), foreground=self.success_color)
         style.configure('Warning.TLabel', font=('Segoe UI', 10, 'bold'), foreground=self.warning_color)
         
-        # Main container - use grid for better control
+        # Main container with canvas for scrolling
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
         
-        main_frame = ttk.Frame(self, padding=10)
-        main_frame.grid(row=0, column=0, sticky='nsew')
-        main_frame.grid_rowconfigure(1, weight=1)
-        main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(1, weight=1)
+        # Create canvas and scrollbar for left column
+        canvas_container = tk.Frame(self, bg=self.bg_color)
+        canvas_container.grid(row=0, column=0, sticky='nsew')
+        canvas_container.grid_rowconfigure(0, weight=1)
+        canvas_container.grid_columnconfigure(0, weight=1)
+        canvas_container.grid_columnconfigure(1, weight=1)
+        
+        # Left canvas with scrollbar
+        left_canvas = tk.Canvas(canvas_container, bg=self.bg_color, highlightthickness=0)
+        left_scrollbar = ttk.Scrollbar(canvas_container, orient="vertical", command=left_canvas.yview)
+        left_scrollable = ttk.Frame(left_canvas)
+        
+        left_scrollable.bind("<Configure>", lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all")))
+        left_canvas.create_window((0, 0), window=left_scrollable, anchor="nw")
+        left_canvas.configure(yscrollcommand=left_scrollbar.set)
+        
+        # Right canvas with scrollbar
+        right_canvas = tk.Canvas(canvas_container, bg=self.bg_color, highlightthickness=0)
+        right_scrollbar = ttk.Scrollbar(canvas_container, orient="vertical", command=right_canvas.yview)
+        right_scrollable = ttk.Frame(right_canvas)
+        
+        right_scrollable.bind("<Configure>", lambda e: right_canvas.configure(scrollregion=right_canvas.bbox("all")))
+        right_canvas.create_window((0, 0), window=right_scrollable, anchor="nw")
+        right_canvas.configure(yscrollcommand=right_scrollbar.set)
+        
+        # Grid layout
+        left_canvas.grid(row=0, column=0, sticky='nsew', padx=(10, 5), pady=10)
+        left_scrollbar.grid(row=0, column=0, sticky='nse', padx=(0, 5))
+        right_canvas.grid(row=0, column=1, sticky='nsew', padx=(5, 10), pady=10)
+        right_scrollbar.grid(row=0, column=1, sticky='nse', padx=(0, 10))
+        
+        # Mouse wheel scrolling - bind to each canvas separately
+        def scroll_left(event):
+            left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            return "break"
+        
+        def scroll_right(event):
+            right_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            return "break"
+        
+        # Bind mouse wheel to canvases when mouse enters
+        left_canvas.bind("<Enter>", lambda e: left_canvas.bind_all("<MouseWheel>", scroll_left))
+        left_canvas.bind("<Leave>", lambda e: left_canvas.unbind_all("<MouseWheel>"))
+        right_canvas.bind("<Enter>", lambda e: right_canvas.bind_all("<MouseWheel>", scroll_right))
+        right_canvas.bind("<Leave>", lambda e: right_canvas.unbind_all("<MouseWheel>"))
+        
+        # Header Section (spans both columns)
+        header_container = tk.Frame(self, bg=self.bg_color)
+        header_container.grid(row=0, column=0, sticky='new', padx=10, pady=(10, 0))
+        
+        main_frame = ttk.Frame(left_scrollable, padding=5)
+        main_frame.pack(fill='both', expand=True)
+        
+        right_main_frame = ttk.Frame(right_scrollable, padding=5)
+        right_main_frame.pack(fill='both', expand=True)
+        
+        right_main_frame = ttk.Frame(right_scrollable, padding=5)
+        right_main_frame.pack(fill='both', expand=True)
         
         # Header Section
         header_frame = ttk.Frame(main_frame)
-        header_frame.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 10))
+        header_frame.pack(fill='x', pady=(0, 10))
         
         title_label = ttk.Label(header_frame, text="STEALTH NETWORK ATTACK TOOL", style='Header.TLabel')
         title_label.pack()
@@ -149,20 +202,16 @@ class StealthJammer(tk.Tk):
         warning_label.pack()
         
         # Left Column - Controls
-        left_column = ttk.Frame(main_frame)
-        left_column.grid(row=1, column=0, sticky='nsew', padx=(0, 5))
-        left_column.grid_rowconfigure(3, weight=1)
+        left_column = main_frame
         
         # Right Column - Statistics
-        right_column = ttk.Frame(main_frame)
-        right_column.grid(row=1, column=1, sticky='nsew', padx=(5, 0))
-        right_column.grid_rowconfigure(2, weight=1)
+        right_column = right_main_frame
         
         # === LEFT COLUMN CONTENT ===
         
         # Anonymity Controls
         anon_frame = ttk.LabelFrame(left_column, text="ANONYMITY CONTROLS", padding=15)
-        anon_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
+        anon_frame.pack(fill='x', pady=(0, 10))
         
         # MAC Randomization
         mac_frame = ttk.Frame(anon_frame)
@@ -198,7 +247,7 @@ class StealthJammer(tk.Tk):
         
         # Attack Controls
         attack_frame = ttk.LabelFrame(left_column, text="ATTACK CONTROLS", padding=15)
-        attack_frame.grid(row=1, column=0, sticky='ew', pady=(0, 10))
+        attack_frame.pack(fill='x', pady=(0, 10))
         
         # Attack toggle
         self.attack_button = tk.Button(attack_frame, text="START ATTACK",
@@ -256,7 +305,7 @@ class StealthJammer(tk.Tk):
         
         # Advanced Configuration
         advanced_frame = ttk.LabelFrame(left_column, text="ADVANCED CONFIGURATION", padding=15)
-        advanced_frame.grid(row=2, column=0, sticky='ew', pady=(0, 10))
+        advanced_frame.pack(fill='x', pady=(0, 10))
         
         # Packet Size Configuration
         ttk.Label(advanced_frame, text="Packet Size Control:", font=('Segoe UI', 10, 'bold')).pack(anchor='w', pady=(5, 2))
@@ -410,7 +459,7 @@ class StealthJammer(tk.Tk):
         
         # Network Info
         network_frame = ttk.LabelFrame(left_column, text="NETWORK INFORMATION", padding=15)
-        network_frame.grid(row=3, column=0, sticky='ew')
+        network_frame.pack(fill='x', pady=(0, 10))
         
         self.network_label = ttk.Label(network_frame, text="Interface: Detecting...", font=('Consolas', 9))
         self.network_label.pack(anchor='w', pady=2)
@@ -433,7 +482,7 @@ class StealthJammer(tk.Tk):
         
         # Real-time Statistics
         stats_frame = ttk.LabelFrame(right_column, text="REAL-TIME STATISTICS", padding=15)
-        stats_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
+        stats_frame.pack(fill='x', pady=(0, 10))
         
         # Status
         status_container = ttk.Frame(stats_frame)
@@ -484,7 +533,7 @@ class StealthJammer(tk.Tk):
         
         # Network Performance
         perf_frame = ttk.LabelFrame(right_column, text="NETWORK PERFORMANCE", padding=15)
-        perf_frame.grid(row=1, column=0, sticky='ew', pady=(0, 10))
+        perf_frame.pack(fill='x', pady=(0, 10))
         
         # Ping
         ping_container = ttk.Frame(perf_frame)
@@ -502,7 +551,7 @@ class StealthJammer(tk.Tk):
         
         # Attack Log
         log_frame = ttk.LabelFrame(right_column, text="ACTIVITY LOG", padding=15)
-        log_frame.grid(row=2, column=0, sticky='nsew')
+        log_frame.pack(fill='both', expand=True)
         log_frame.grid_rowconfigure(0, weight=1)
         log_frame.grid_columnconfigure(0, weight=1)
         
